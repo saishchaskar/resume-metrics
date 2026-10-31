@@ -73,7 +73,7 @@ const Login = () => {
                     {isSubmitting ? 'Signing in...' : 'Sign in'}
                 </button>
             </form>
-            <p className="auth-switch">New to ResumeSignal? <Link to="/signup">Create an account</Link></p>
+            <p className="auth-switch">New to ResumeMetrics? <Link to="/signup">Create an account</Link></p>
         </AuthLayout>
     );
 };

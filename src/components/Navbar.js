@@ -12,7 +12,7 @@ const Navbar = () => {
         <header className="site-nav">
             <nav className="site-nav__inner" aria-label="Main navigation">
                 <Link to={auth.token ? '/dashboard' : '/'} className="site-brand" onClick={closeMenu}>
-                    <span className="site-brand__mark" aria-hidden="true">R</span>
+                    <img className="site-brand__mark" src="/brand-mark.svg" alt="" aria-hidden="true" />
                     <span>Resume<span className="site-brand__accent">Signal</span></span>
                 </Link>
                 <button

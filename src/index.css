@@ -61,15 +61,10 @@ input {
 }
 
 .site-brand__mark {
-  display: grid;
+  display: block;
   width: 34px;
-  aspect-ratio: 1;
-  place-items: center;
+  height: 34px;
   border-radius: 9px;
-  background: #d7ed78;
-  color: #203328;
-  font-family: 'Fraunces', Georgia, serif;
-  font-size: 19px;
 }
 
 .site-brand__accent {

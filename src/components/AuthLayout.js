@@ -33,7 +33,7 @@ const AuthLayout = ({ children }) => (
                 </div>
                 <p className="signal-preview__caption">SAMPLE MATCH RESULTS</p>
             </div>
-            <div className="auth-aside-foot"><span>01</span><span>ResumeSignal</span></div>
+            <div className="auth-aside-foot"><span>01</span><span>ResumeMetrics</span></div>
         </aside>
         <div className="auth-panel">
             <div className="auth-form-content">{children}</div>

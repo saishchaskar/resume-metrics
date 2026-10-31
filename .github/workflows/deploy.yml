@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   build-and-deploy:
@@ -17,6 +16,32 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Validate Google service account secret
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          raw = os.environ.get('GCP_SA_KEY', '')
+          if not raw:
+              sys.exit('GCP_SA_KEY is empty. Add the service-account JSON as a GitHub Actions secret.')
+          if raw.startswith('\ufeff'):
+              sys.exit('GCP_SA_KEY starts with a BOM. Re-save the JSON as UTF-8 without BOM, then update the secret.')
+          if '\x00' in raw:
+              sys.exit('GCP_SA_KEY contains NUL bytes and is likely UTF-16 encoded. Re-save it as UTF-8 JSON, then update the secret.')
+          try:
+              credential = json.loads(raw)
+          except json.JSONDecodeError:
+              sys.exit('GCP_SA_KEY is not raw valid JSON. Re-copy the downloaded service-account JSON; do not Base64 encode it or include surrounding quotes.')
+          required = {'type', 'project_id', 'private_key', 'client_email'}
+          if credential.get('type') != 'service_account' or not required.issubset(credential):
+              sys.exit('GCP_SA_KEY JSON is missing service-account fields. Download a service-account key JSON and update the secret.')
+          print('GCP_SA_KEY contains valid service-account JSON.')
+          PY
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
