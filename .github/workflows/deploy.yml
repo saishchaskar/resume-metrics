@@ -57,17 +57,20 @@ jobs:
         run: gcloud auth configure-docker gcr.io --quiet
 
       - name: Build Docker image
-        run: docker build -f resume-screening-backend/Dockerfile -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-app:$GITHUB_SHA resume-screening-backend
+        run: docker build -f resume-screening-backend/Dockerfile -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-backend-app:$GITHUB_SHA resume-screening-backend
 
       - name: Push Docker image to Google Container Registry
-        run: docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-app:$GITHUB_SHA
+        run: docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-backend-app:$GITHUB_SHA
+
+      - name: Confirm existing Cloud Run service
+        run: gcloud run services describe flask-backend-app --platform managed --region asia-south1 --project ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Deploy to Cloud Run
         run: |
-          gcloud run deploy flask-app \
-            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-app:$GITHUB_SHA \
+          gcloud run deploy flask-backend-app \
+            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-backend-app:$GITHUB_SHA \
             --platform managed \
-            --region us-central1 \
+            --region asia-south1 \
             --allow-unauthenticated \
             --port 8080 \
             --set-env-vars APP_ENV=production,GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME || 'resume-screening-resumes' }} \

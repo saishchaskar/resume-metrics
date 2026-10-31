@@ -673,4 +673,6 @@ def send_email():
         return jsonify({'error': 'Failed to send email.'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, use_reloader=False)  # Disable auto-reloader
+    # Cloud Run supplies PORT and requires the process to bind on all interfaces.
+    # Keep Flask's usual port for local development when PORT is not set.
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', '5000')), debug=False, use_reloader=False)
