@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import api from '../api';
 import { useNavigate } from 'react-router-dom';
 
@@ -10,13 +10,18 @@ const Dashboard = () => {
     const [loading, setLoading] = useState(false);
     const [rankedCandidates, setRankedCandidates] = useState([]);
     const [error, setError] = useState('');
-    const navigate = useNavigate(); // Hook for navigation
+    const [isDragging, setIsDragging] = useState(false);
+    const navigate = useNavigate();
 
-    const handleJobDescChange = (e) => setJobDesc(e.target.value);
-    const handleResumesChange = (e) => {
-        const file = e.target.files?.[0] || null;
+    const chooseFile = (file) => {
+        if (!file) return;
+        if (!file.name.toLowerCase().endsWith('.zip')) {
+            setResumes(null);
+            setError('Choose a ZIP archive containing PDF or DOCX resumes.');
+            return;
+        }
         setResumes(file);
-        setError(file && !file.name.toLowerCase().endsWith('.zip') ? 'Please choose a ZIP file.' : '');
+        setError('');
     };
 
     useEffect(() => {
@@ -39,7 +44,7 @@ const Dashboard = () => {
                 }
             } catch (requestError) {
                 if (!cancelled) {
-                    setError(requestError.response?.data?.error || 'Failed to fetch task status. Please try again.');
+                    setError(requestError.response?.data?.error || 'Could not check processing status. Please try again.');
                     setLoading(false);
                 }
             }
@@ -48,16 +53,17 @@ const Dashboard = () => {
         return () => { cancelled = true; clearTimeout(timer); };
     }, [taskId]);
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
+    const handleSubmit = async (event) => {
+        event.preventDefault();
         if (!jobDesc.trim()) {
-            setError('Please enter a job description.');
+            setError('Add the job description before starting the review.');
             return;
         }
-        if (!resumes || !resumes.name.toLowerCase().endsWith('.zip')) {
-            setError('Please upload a ZIP file containing PDF or DOCX resumes.');
+        if (!resumes) {
+            setError('Add a ZIP archive containing PDF or DOCX resumes.');
             return;
         }
+
         setLoading(true);
         setError('');
         setRankedCandidates([]);
@@ -65,152 +71,154 @@ const Dashboard = () => {
         setProgress({ current: 0, total: 0, filename: '' });
 
         const formData = new FormData();
-        formData.append('job_description', jobDesc);
+        formData.append('job_description', jobDesc.trim());
         formData.append('resumes_zip', resumes);
-
         try {
-            const response = await api.post('/process', formData, {
-                headers: {
-                    'Content-Type': 'multipart/form-data',
-                },
+            const { data } = await api.post('/process', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
             });
-            const { task_id } = response.data;
-            setTaskId(task_id);
-            if (!task_id) throw new Error('The server did not return a processing task.');
-        } catch (error) {
-            console.error('Error processing resumes:', error);
-            setError(error.response?.data?.error || 'Failed to process resumes. Please try again.');
+            if (!data.task_id) throw new Error('The server did not return a processing task.');
+            setTaskId(data.task_id);
+        } catch (requestError) {
+            setError(requestError.response?.data?.error || requestError.message || 'Could not start resume processing.');
             setLoading(false);
         }
     };
 
-    const handleSeeResults = () => {
-        navigate('/results');
-    };
+    const progressPercent = progress.total ? Math.min((progress.current / progress.total) * 100, 100) : 0;
 
     return (
-        <div className="bg-sky-100 rounded-xl flex flex-col lg:flex-row justify-center items-center min-h-screen p-10">
-
-
-            {/* Right Side: Form Container */}
-            <div className="w-full lg:w-1/2 bg-white p-8 lg:p-16 rounded-xl shadow-md flex flex-col justify-center">
-                {/* Header */}
-                <div className="text-center mb-6">
-                    <h2 className="text-3xl font-semibold text-gray-900">Resume Processing  </h2>
-                    <p className="mt-2 text-sm text-gray-500">
-                        Paste the Job Description and Upload Resume Zip File
-                    </p>
+        <div className="workspace-page">
+            <div className="workspace-heading">
+                <div>
+                    <p className="workspace-eyebrow">RECRUITER WORKSPACE</p>
+                    <h1>Resume screening</h1>
+                    <p>Compare candidate experience against a role and review the strongest matches.</p>
                 </div>
+                <button type="button" className="button button--secondary" onClick={() => navigate('/results')}>
+                    View saved results <span aria-hidden="true">↗</span>
+                </button>
+            </div>
 
-                {/* Form */}
-                <form onSubmit={handleSubmit} className="space-y-6">
-                    {/* Job Description */}
-                    <div>
-                        <label htmlFor="jobDescription" className="block text-sm font-bold text-gray-700 mb-2">
-                            Job Description
-                        </label>
-                        <textarea
-                            id="jobDescription"
-                            name="jobDesc"
-                            rows="5"
-                            value={jobDesc}
-                            onChange={handleJobDescChange}
-                            placeholder="Enter the job description here..."
-                            required
-                            className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500"
-                        />
-                    </div>
-
-                    {/* File Upload */}
-                    <div>
-                        <label className="flex flex-col rounded-lg border-4 border-dashed border-gray-400 w-full h-60 p-10 group text-center cursor-pointer">
-                            <div className="h-full w-full flex flex-col items-center justify-center">
-                                <div className="flex flex-auto p-2 max-h-48 w-2/5 mx-auto -mt-10">
-                                    <img
-                                        className="object-center h-26"
-                                        src="https://img.freepik.com/free-vector/image-upload-concept-landing-page_52683-27130.jpg?size=338&ext=jpg"
-                                        alt="Upload concept"
-                                    />
-                                </div>
-                                <p className="pointer-events-none text-gray-500 mt-4">
-                                    <span className="text-sm">Choose a ZIP file</span> here <br />
-                                    <span className="text-blue-600">Select a file</span> from your computer
-                                </p>
-                            </div>
-                            <input
-                                type="file"
-                                id="resumeZip"
-                                aria-label="Upload resume ZIP file"
-                                accept=".zip"
-                                onChange={handleResumesChange}
-                                className="hidden"
-                                required
-                            />
-                        </label>
-                        {resumes && <p className="mt-2 text-sm text-gray-600">Selected: {resumes.name}</p>}
-                    </div>
-
-                    {/* File Type Info */}
-                    <p className="text-sm text-gray-500">
-                        <span>File type: Zip</span>
-                    </p>
-
-                    {/* Upload Button */}
-                    <div>
-                        <button
-                            type="submit"
-                            className={`w-full flex justify-center bg-blue-500 text-gray-100 p-4 rounded-full tracking-wide font-semibold focus:outline-none focus:shadow-outline hover:bg-blue-600 shadow-lg transition ease-in duration-300 ${loading ? 'opacity-50 cursor-not-allowed' : ''
-                                }`}
-                            disabled={loading}
-                        >
-                            {loading ? 'Processing...' : 'Upload'}
-                        </button>
-                    </div>
-                </form>
-
-                {/* Error Message */}
-                {error && (
-                    <div className="mt-4 p-3 bg-red-100 text-red-700 rounded">
-                        {error}
-                    </div>
-                )}
-
-                {/* Progress Indicator */}
-                {loading && taskId && (
-                    <div className="mt-4 p-3 bg-yellow-100 text-yellow-700 rounded">
-                        <p>
-                            Processing file {progress.current} of {progress.total}: {progress.filename}
-                        </p>
-                        <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
-                            <div
-                                className="bg-blue-600 h-2.5 rounded-full"
-                                style={{ width: `${progress.total > 0 ? Math.min((progress.current / progress.total) * 100, 100) : 0}%` }}
-                            ></div>
+            <div className="workspace-layout">
+                <section className="workspace-card" aria-labelledby="screening-title">
+                    <div className="workspace-card__heading">
+                        <div className="step-marker">01</div>
+                        <div>
+                            <h2 id="screening-title">Set up a screening</h2>
+                            <p>Add the role details and a ZIP of resumes to rank.</p>
                         </div>
-                        <p className="mt-2">
-                            Estimated time remaining:{' '}
-                            {progress.total > 0
-                                ? `${Math.max(60 - (progress.current / progress.total) * 60, 0).toFixed(0)} seconds`
-                                : 'Calculating...'}
-                        </p>
                     </div>
-                )}
 
-                {/* See Results Button */}
-                {rankedCandidates.length > 0 && !loading && (
-                    <div className="mt-6">
-                        <button
-                            type="button"
-                            className="w-full flex justify-center bg-green-500 text-white p-4 rounded-full tracking-wide font-semibold focus:outline-none focus:shadow-outline hover:bg-green-600 shadow-lg transition ease-in duration-300"
-                            onClick={handleSeeResults}
-                        >
-                            See Results
+                    <form onSubmit={handleSubmit} className="screening-form">
+                        <div className="form-field">
+                            <div className="form-field__heading">
+                                <label htmlFor="jobDescription">Job description</label>
+                                <span>{jobDesc.length} characters</span>
+                            </div>
+                            <textarea
+                                id="jobDescription"
+                                value={jobDesc}
+                                onChange={(event) => setJobDesc(event.target.value)}
+                                placeholder="Paste the responsibilities, skills, and experience required for this role…"
+                                rows={8}
+                                required
+                                disabled={loading}
+                            />
+                            <p className="field-hint">Include the key skills you want the ranking to consider.</p>
+                        </div>
+
+                        <div className="form-field">
+                            <div className="form-field__heading">
+                                <label htmlFor="resumeZip">Resume files</label>
+                                <span>ZIP · PDF or DOCX</span>
+                            </div>
+                            <label
+                                htmlFor="resumeZip"
+                                className={`upload-dropzone${isDragging ? ' is-dragging' : ''}${resumes ? ' has-file' : ''}`}
+                                onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }}
+                                onDragLeave={() => setIsDragging(false)}
+                                onDrop={(event) => {
+                                    event.preventDefault();
+                                    setIsDragging(false);
+                                    chooseFile(event.dataTransfer.files?.[0]);
+                                }}
+                            >
+                                <span className="upload-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14.5v4A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5v-4" /></svg>
+                                </span>
+                                {resumes ? (
+                                    <>
+                                        <strong>{resumes.name}</strong>
+                                        <span>{(resumes.size / (1024 * 1024)).toFixed(2)} MB · Ready to upload</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <strong>Drop your resume ZIP here</strong>
+                                        <span>or <em>browse files</em> on your computer</span>
+                                        <small>One ZIP archive with PDF or DOCX resumes</small>
+                                    </>
+                                )}
+                                <input
+                                    id="resumeZip"
+                                    type="file"
+                                    accept=".zip,application/zip"
+                                    aria-label="Choose resume ZIP file"
+                                    onChange={(event) => {
+                                        chooseFile(event.target.files?.[0]);
+                                        event.target.value = '';
+                                    }}
+                                    disabled={loading}
+                                />
+                            </label>
+                            {resumes && <button className="text-button clear-file" type="button" onClick={() => setResumes(null)} disabled={loading}>Remove selected file</button>}
+                        </div>
+
+                        {error && <div className="workspace-alert" role="alert">{error}</div>}
+
+                        <button className="button button--primary start-screening" type="submit" disabled={loading}>
+                            {loading ? 'Screening in progress…' : 'Start screening'}
+                            {!loading && <span aria-hidden="true">→</span>}
                         </button>
+                    </form>
+
+                    {loading && (
+                        <div className="processing-panel" role="status" aria-live="polite">
+                            <div className="processing-panel__top">
+                                <span className="processing-pulse" />
+                                <div><strong>Reviewing resumes</strong><span>{progress.total ? `${progress.current} of ${progress.total} processed` : 'Preparing your batch…'}</span></div>
+                                <strong>{Math.round(progressPercent)}%</strong>
+                            </div>
+                            <div className="progress-track"><span style={{ width: `${progressPercent}%` }} /></div>
+                            {progress.filename && <p>Current file: <strong>{progress.filename}</strong></p>}
+                        </div>
+                    )}
+
+                    {!loading && rankedCandidates.length > 0 && (
+                        <div className="completion-panel" role="status">
+                            <div><span className="completion-check">✓</span><div><strong>Screening complete</strong><span>{rankedCandidates.length} candidates ranked and saved.</span></div></div>
+                            <button type="button" className="button button--secondary" onClick={() => navigate('/results')}>Review ranked candidates →</button>
+                        </div>
+                    )}
+                </section>
+
+                <aside className="workspace-aside">
+                    <div className="aside-card aside-card--dark">
+                        <p className="workspace-eyebrow">YOUR WORKFLOW</p>
+                        <h2>From a role brief to a ranked shortlist.</h2>
+                        <ol className="workflow-steps">
+                            <li><span>1</span><div><strong>Describe the role</strong><p>Paste the job description and core requirements.</p></div></li>
+                            <li><span>2</span><div><strong>Add resumes</strong><p>Upload a ZIP containing PDF or DOCX files.</p></div></li>
+                            <li><span>3</span><div><strong>Review matches</strong><p>Search, sort, and open ranked candidate files.</p></div></li>
+                        </ol>
                     </div>
-                )}
+                    <div className="aside-card aside-card--note">
+                        <span className="note-icon" aria-hidden="true">i</span>
+                        <div><strong>Keep the brief focused</strong><p>Clear role requirements help make candidate similarity scores easier to interpret.</p></div>
+                    </div>
+                </aside>
             </div>
         </div>
-
     );
 };
 
