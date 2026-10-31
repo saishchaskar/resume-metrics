@@ -2,6 +2,7 @@
 import React, { useState, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
+import AuthLayout from './AuthLayout';
 
 const Login = () => {
     const { login } = useContext(AuthContext);
@@ -11,6 +12,7 @@ const Login = () => {
         password: '',
     });
     const [error, setError] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleChange = (e) => {
         const { name, value } = e.target;
@@ -21,74 +23,58 @@ const Login = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        const result = await login(credentials); // Pass remember if your login function supports it
-        if (result.success) {
-            navigate('/dashboard');
-        } else {
-            setError(result.message);
+        setError('');
+        setIsSubmitting(true);
+        try {
+            const result = await login(credentials);
+            if (result.success) {
+                navigate('/dashboard');
+            } else {
+                setError(result.message);
+            }
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
     return (
-        <div className="bg-sky-100 flex justify-center items-center min-h-screen">
-            {/* Left: Image */}
-            <div className="w-1/2 h-screen hidden lg:block">
-                <img
-                    src="https://img.freepik.com/fotos-premium/imagen-fondo_910766-187.jpg?w=826"
-                    alt=""
-                    className="object-cover w-full h-full"
-                />
-            </div>
-            {/* Right: Login Form */}
-            <div className="lg:p-36 md:p-52 sm:p-20 p-8 w-full lg:w-1/2 flex justify-center items-center">
-                <div className="w-full max-w-md bg-white p-8 rounded-lg shadow-md">
-                    <h1 className="text-2xl font-semibold mb-4 text-center">Login</h1>
-                    {error && <div className="mb-4 text-red-500 text-center">{error}</div>}
-                    <form onSubmit={handleSubmit}>
-                        {/* Username Input */}
-                        <div className="mb-4">
-                            <label htmlFor="username" className="block text-gray-600 mb-2">Username</label>
-                            <input
-                                type="text"
-                                id="username"
-                                name="username"
-                                value={credentials.username}
-                                onChange={handleChange}
-                                className="w-full border border-gray-300 rounded-md py-2 px-3 focus:outline-none focus:border-blue-500"
-                                autoComplete="off"
-                                required
-                            />
-                        </div>
-                        {/* Password Input */}
-                        <div className="mb-4">
-                            <label htmlFor="password" className="block text-gray-800 mb-2">Password</label>
-                            <input
-                                type="password"
-                                id="password"
-                                name="password"
-                                value={credentials.password}
-                                onChange={handleChange}
-                                className="w-full border border-gray-300 rounded-md py-2 px-3 focus:outline-none focus:border-blue-500"
-                                autoComplete="off"
-                                required
-                            />
-                        </div>
-
-                        {/* Login Button */}
-                        <button
-                            type="submit"
-                            className="bg-red-500 hover:bg-blue-600 text-white font-semibold rounded-md py-2 px-4 w-full transition-colors"
-                        >
-                            Login
-                        </button>
-                    </form>
-                    {/* Sign up Link */}
-                    <div className="mt-6 text-green-500 text-center">
-                        <Link to="/signup" className="hover:underline">Don't Have an account? Sign up Here</Link>
-                    </div>
+        <AuthLayout>
+            <h1 className="auth-title">Welcome back</h1>
+            <p className="auth-description">Sign in to continue to your screening workspace.</p>
+            {error && <div className="auth-error" role="alert">{error}</div>}
+            <form className="auth-form" onSubmit={handleSubmit}>
+                <div className="auth-field">
+                    <label htmlFor="username">Username</label>
+                    <input
+                        type="text"
+                        id="username"
+                        name="username"
+                        value={credentials.username}
+                        onChange={handleChange}
+                        autoComplete="username"
+                        maxLength="128"
+                        required
+                    />
                 </div>
-            </div>
-        </div>
+                <div className="auth-field">
+                    <label htmlFor="password">Password</label>
+                    <input
+                        type="password"
+                        id="password"
+                        name="password"
+                        value={credentials.password}
+                        onChange={handleChange}
+                        autoComplete="current-password"
+                        maxLength="128"
+                        required
+                    />
+                </div>
+                <button className="auth-submit" type="submit" disabled={isSubmitting}>
+                    {isSubmitting ? 'Signing in...' : 'Sign in'}
+                </button>
+            </form>
+            <p className="auth-switch">New to ResumeSignal? <Link to="/signup">Create an account</Link></p>
+        </AuthLayout>
     );
 };
 

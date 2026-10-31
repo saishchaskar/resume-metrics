@@ -13,10 +13,12 @@
 
 # misc
 .DS_Store
+.env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+/resume-screening-backend/resume-screening-tool-e7bec94919ca.json
 
 npm-debug.log*
 yarn-debug.log*

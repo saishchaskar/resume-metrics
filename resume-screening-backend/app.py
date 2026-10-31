@@ -4,6 +4,9 @@ import tempfile
 import logging
 import uuid
 import json
+import secrets
+from datetime import timedelta
+from time import time
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -12,6 +15,7 @@ import pdfplumber
 import docx
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 import sqlite3
 from sentence_transformers import SentenceTransformer, util
 import tensorflow as tf
@@ -36,8 +40,12 @@ tf.get_logger().setLevel('ERROR')
 
 app = Flask(__name__)
 
-# Updated CORS setup
-CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}}, allow_headers=["Content-Type", "Authorization"])
+# The frontend should use same-origin routing where possible. Configure explicit
+# origins only when the frontend and API are deployed on separate hosts.
+cors_origins = [origin.strip() for origin in os.getenv(
+    'CORS_ALLOWED_ORIGINS', 'http://localhost:3000'
+).split(',') if origin.strip()]
+CORS(app, resources={r"/*": {"origins": cors_origins}}, allow_headers=["Content-Type", "Authorization"])
 
 # Google Cloud Storage setup
 BUCKET_NAME = "resume-screening-resumes"
@@ -51,8 +59,53 @@ logging.basicConfig(level=logging.DEBUG)
 # In-memory task store
 tasks = {}
 
-# Configuration for JWT
-app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your_default_secret_key')  # Use environment variables in production
+# Configuration for JWT. Production must provide a stable, private secret.
+app_environment = os.getenv('APP_ENV', 'development').lower()
+jwt_secret = os.getenv('JWT_SECRET_KEY')
+if not jwt_secret and app_environment == 'production':
+    raise RuntimeError('JWT_SECRET_KEY must be configured in production.')
+app.config['JWT_SECRET_KEY'] = jwt_secret or secrets.token_urlsafe(48)
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=30)
+
+# Cloud hosting terminates TLS before forwarding requests to this app.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
+
+DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_urlsafe(32))
+
+
+def login_is_rate_limited(client_ip):
+    conn = sqlite3.connect('users.db', timeout=10)
+    try:
+        attempts = conn.execute(
+            'SELECT COUNT(*) FROM auth_login_attempts WHERE ip_address = ? AND attempted_at > ?',
+            (client_ip, time() - 60),
+        ).fetchone()[0]
+        return attempts >= 10
+    finally:
+        conn.close()
+
+
+def record_login_failure(client_ip):
+    conn = sqlite3.connect('users.db', timeout=10)
+    try:
+        now = time()
+        conn.execute('DELETE FROM auth_login_attempts WHERE attempted_at < ?', (now - 86400,))
+        conn.execute(
+            'INSERT INTO auth_login_attempts (ip_address, attempted_at) VALUES (?, ?)',
+            (client_ip, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_login_failures(client_ip):
+    conn = sqlite3.connect('users.db', timeout=10)
+    try:
+        conn.execute('DELETE FROM auth_login_attempts WHERE ip_address = ?', (client_ip,))
+        conn.commit()
+    finally:
+        conn.close()
 
 jwt = JWTManager(app)
 
@@ -89,6 +142,14 @@ def init_db():
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS auth_login_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip_address TEXT NOT NULL,
+            attempted_at REAL NOT NULL
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_auth_login_attempts_ip_time ON auth_login_attempts (ip_address, attempted_at)')
     conn.commit()
     conn.close()
 
@@ -104,7 +165,7 @@ def upload_to_gcs(file_obj, destination_blob_name):
         blob.upload_from_file(file_obj)
         # Generate a signed URL valid for 1 hour
         gcs_url = blob.generate_signed_url(expiration=3600, version='v4', method='GET')
-        logging.debug(f"Uploaded {destination_blob_name} to GCS: {gcs_url}")
+        logging.debug(f"Uploaded {destination_blob_name} to GCS.")
         return gcs_url
     except Exception as e:
         logging.error(f"Failed to upload {destination_blob_name} to GCS: {e}")
@@ -231,12 +292,20 @@ def process_resumes_background(job_description, uploaded_files, task_id, user_id
 
 @app.route('/api/signup', methods=['POST'])
 def signup():
-    username = request.json.get('username')
-    password = request.json.get('password')
+    if app_environment == 'production' and not request.is_secure:
+        return jsonify({'error': 'HTTPS is required.'}), 400
 
-    if not username or not password:
-        logging.error("Signup attempt with missing username or password.")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'A JSON request body is required.'}), 400
+    username = data.get('username')
+    password = data.get('password')
+
+    if not isinstance(username, str) or not isinstance(password, str):
         return jsonify({'error': 'Username and password are required.'}), 400
+    username = username.strip()
+    if not username or len(username) > 128 or len(password) < 12 or len(password) > 128:
+        return jsonify({'error': 'Use a username up to 128 characters and a password between 12 and 128 characters.'}), 400
 
     # Check if user already exists
     conn = sqlite3.connect('users.db')
@@ -244,7 +313,6 @@ def signup():
     existing_user = cursor.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
     if existing_user:
         conn.close()
-        logging.error(f"Signup attempt for existing user: {username}")
         return jsonify({'error': 'User already exists'}), 409
 
     # Create new user with hashed password
@@ -253,7 +321,6 @@ def signup():
         cursor.execute('INSERT INTO users (username, password) VALUES (?, ?)', (username, hashed_password))
         conn.commit()
         user_id = cursor.lastrowid  # Get the inserted user's ID
-        logging.debug(f"User created: {username} with ID: {user_id}")
     except sqlite3.Error as e:
         conn.close()
         logging.error(f"Database error during signup for user {username}: {e}")
@@ -261,17 +328,29 @@ def signup():
     conn.close()
 
     # Create JWT token with user ID as identity
-    access_token = create_access_token(identity=user_id)
+    access_token = create_access_token(identity=str(user_id))
     return jsonify({'token': access_token, 'user': {'id': user_id, 'username': username}}), 201
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    username = request.json.get('username')
-    password = request.json.get('password')
+    if app_environment == 'production' and not request.is_secure:
+        return jsonify({'error': 'HTTPS is required.'}), 400
 
-    if not username or not password:
-        logging.error("Login attempt with missing username or password.")
+    client_ip = request.remote_addr or 'unknown'
+    if login_is_rate_limited(client_ip):
+        return jsonify({'error': 'Too many login attempts. Try again in one minute.'}), 429, {'Retry-After': '60'}
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'A JSON request body is required.'}), 400
+    username = data.get('username')
+    password = data.get('password')
+
+    if not isinstance(username, str) or not isinstance(password, str):
         return jsonify({'error': 'Username and password are required.'}), 400
+    username = username.strip()
+    if not username or len(username) > 128 or not password or len(password) > 128:
+        return jsonify({'error': 'Invalid credentials'}), 401
 
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
@@ -279,16 +358,17 @@ def login():
     conn.close()
 
     if not user:
-        logging.error(f"Login attempt with non-existent user: {username}")
+        check_password_hash(DUMMY_PASSWORD_HASH, password)
+        record_login_failure(client_ip)
         return jsonify({'error': 'Invalid credentials'}), 401
 
     if not check_password_hash(user[2], password):  # user[2] is the password field
-        logging.error(f"Login attempt with incorrect password for user: {username}")
+        record_login_failure(client_ip)
         return jsonify({'error': 'Invalid credentials'}), 401
 
     # Create JWT token with user ID as identity
-    access_token = create_access_token(identity=user[0])  # user[0] is the ID
-    logging.debug(f"User logged in: {username} with ID: {user[0]}")
+    clear_login_failures(client_ip)
+    access_token = create_access_token(identity=str(user[0]))
     return jsonify({'token': access_token, 'user': {'id': user[0], 'username': username}}), 200
 
 @app.route('/api/user', methods=['GET'])
@@ -319,7 +399,6 @@ def process_resumes_route():
         return jsonify({'error': 'Job description and resume zip are required.'}), 400
 
     job_description = request.form['job_description']
-    logging.debug(f"Job Description: {job_description}")
     resumes_zip = request.files['resumes_zip']
     logging.debug(f"Received resumes zip: {resumes_zip.filename}")
 

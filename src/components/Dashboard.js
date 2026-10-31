@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import axios from 'axios';
+import api from '../api';
 import { useNavigate } from 'react-router-dom';
 
 const Dashboard = () => {
@@ -39,7 +39,7 @@ const Dashboard = () => {
         formData.append('resumes_zip', resumes);
 
         try {
-            const response = await axios.post('http://localhost:5000/api/process', formData, {
+            const response = await api.post('/process', formData, {
                 headers: {
                     'Content-Type': 'multipart/form-data',
                 },
@@ -57,7 +57,7 @@ const Dashboard = () => {
     const pollTaskStatus = (task_id) => {
         const interval = setInterval(async () => {
             try {
-                const response = await axios.get(`http://localhost:5000/api/result/${task_id}`);
+                const response = await api.get(`/result/${task_id}`);
                 const data = response.data;
 
                 if (data.state === 'processing') {
