@@ -156,6 +156,8 @@ This builds the image but does not start it or require Google Cloud credentials.
 
 The Cloud Run workflow updates the existing `flask-backend-app` service in `asia-south1`; it checks that service exists before deploying so a name or region mismatch fails instead of creating another service. It uses GitHub Actions secrets `GCP_PROJECT_ID` and `GCP_SA_KEY` (JSON for a deployment service account). It expects a Secret Manager secret named `JWT_SECRET_KEY`, granted to the Cloud Run runtime service account. That runtime account needs `Storage Object Admin` on the configured resume bucket and `Service Account Token Creator` permission to sign resume URLs. Set the GitHub Actions variable `GCS_BUCKET_NAME` if the bucket is not named `resume-screening-resumes`; the workflow defaults to that bucket name. Never commit credentials, and revoke any service-account key that was previously committed.
 
+Firebase Hosting deploys the frontend from `master` in project `ocr-text-50a5b`. Its build uses the Cloud Run URL shown above; override it with the GitHub Actions variable `REACT_APP_API_URL` if the service URL changes. The Cloud Run deploy sets `CORS_ALLOWED_ORIGINS` for the Firebase `.web.app` and `.firebaseapp.com` domains. Firebase Hosting preview channels build the frontend too, but their temporary domains are not included in the production CORS allowlist.
+
 If the deploy job reports that `GCP_SA_KEY` is not valid JSON, download a fresh JSON key for the deployment service account and replace the repository secret with the raw file contents. On Linux, you can validate and set it with GitHub CLI:
 
 ```sh
