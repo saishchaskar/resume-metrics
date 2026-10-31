@@ -1,4 +1,4 @@
-# ResumeSignal
+# ResumeMetrics
 
 Resume screening workspace built with React and a Flask API.
 
@@ -6,11 +6,11 @@ Resume screening workspace built with React and a Flask API.
 
 Desktop sign-in:
 
-![ResumeSignal sign-in on desktop](docs/screenshots/login-desktop.png)
+![ResumeMetrics sign-in on desktop](docs/screenshots/login-desktop.png)
 
 Mobile sign-in:
 
-![ResumeSignal sign-in on mobile](docs/screenshots/login-mobile.png)
+![ResumeMetrics sign-in on mobile](docs/screenshots/login-mobile.png)
 
 ## Authentication and Deployment
 
@@ -57,13 +57,13 @@ RESUMESIGNAL_TEST_STORAGE="$PWD/resume-screening-backend/uploads.local" \
 .venv/bin/python resume-screening-backend/app.py
 ```
 
-Terminal 2, from the repository root:
+Terminal 2, from the repository root (the `start` script enables polling to avoid the Linux watcher limit):
 
 ```sh
-CHOKIDAR_USEPOLLING=true npm start
+npm start
 ```
 
-Open `http://localhost:3000`, create an account with a password of at least 12 characters, then upload a ZIP file containing PDF or DOCX resumes. The frontend's development proxy forwards `/api` requests to `http://localhost:5000`. The polling flag works around Linux's inotify watcher limit; it can use more CPU while the dev server is running.
+Open `http://localhost:3000`, create an account with a password of at least 12 characters, then upload a ZIP file containing PDF or DOCX resumes. The frontend's development proxy forwards `/api` requests to `http://localhost:5000`. Polling works around Linux's inotify watcher limit and can use more CPU while the dev server is running. If your system watcher limit has been raised, remove the polling environment settings from the `start` script in `package.json` for lower CPU usage.
 
 If you prefer to fix the Linux watcher limit system-wide instead, inspect the current limit and raise it:
 
@@ -95,7 +95,7 @@ export LOCAL_SA_NAME="resumesignal-local"
 export LOCAL_SA="${LOCAL_SA_NAME}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
 gcloud config set project "$GCP_PROJECT_ID"
 gcloud services enable storage.googleapis.com iamcredentials.googleapis.com --project "$GCP_PROJECT_ID"
-gcloud iam service-accounts create "$LOCAL_SA_NAME" --project "$GCP_PROJECT_ID" --display-name "ResumeSignal local development"
+gcloud iam service-accounts create "$LOCAL_SA_NAME" --project "$GCP_PROJECT_ID" --display-name "ResumeMetrics local development"
 gcloud storage buckets create "gs://$GCS_BUCKET_NAME" --project "$GCP_PROJECT_ID" --location us-central1 --uniform-bucket-level-access
 gcloud storage buckets add-iam-policy-binding "gs://$GCS_BUCKET_NAME" \
   --member="serviceAccount:$LOCAL_SA" --role=roles/storage.objectAdmin
@@ -113,7 +113,7 @@ gcloud auth application-default login --impersonate-service-account="$LOCAL_SA"
 
 If you cannot use impersonation, you can instead set `GOOGLE_APPLICATION_CREDENTIALS` to the absolute path of a service-account JSON key. Do not put that key in this repository or send it in chat. Keyless impersonation is preferred.
 
-3. Install the backend's production dependencies. The requirements include the ML model stack and are much larger than the test dependencies:
+3. Install the backend's production dependencies. This includes the Sentence Transformers model stack and CPU-only PyTorch; it is larger than the lightweight test dependencies:
 
 ```sh
 .venv/bin/python -m pip install -r resume-screening-backend/requirements.txt
@@ -134,14 +134,33 @@ cd resume-screening-backend
 ../.venv/bin/python app.py
 ```
 
-In another terminal, from the repository root, start the frontend (use polling on Linux if you see `ENOSPC`):
+In another terminal, from the repository root, start the frontend:
 
 ```sh
-CHOKIDAR_USEPOLLING=true npm start
+npm start
 ```
 
 This real-cloud mode uploads resumes into your bucket. It does not use `RESUMESIGNAL_LOCAL_TEST`. Avoid uploading real candidate data until you have configured your bucket access and data retention appropriately.
 
 ## Production deployment settings
 
+The backend production requirements are intentionally limited to packages the API uses. They use CPU-only PyTorch for Sentence Transformers; the previous environment freeze included `tensorflow-intel`, which has no compatible Linux distribution and caused Cloud Run image builds to fail. Build the same backend image locally from the repository root with:
+
+```sh
+docker build -f resume-screening-backend/Dockerfile \
+  -t resumemetrics-api:local \
+  resume-screening-backend
+```
+
+This builds the image but does not start it or require Google Cloud credentials. The deployed container still needs the production environment variables and Google Cloud permissions described below.
+
 The Cloud Run workflow uses GitHub Actions secrets `GCP_PROJECT_ID` and `GCP_SA_KEY` (JSON for a deployment service account). It expects a Secret Manager secret named `JWT_SECRET_KEY`, granted to the Cloud Run runtime service account. That runtime account needs `Storage Object Admin` on the configured resume bucket and `Service Account Token Creator` permission to sign resume URLs. Set the GitHub Actions variable `GCS_BUCKET_NAME` if the bucket is not named `resume-screening-resumes`; the workflow defaults to that bucket name. Never commit credentials, and revoke any service-account key that was previously committed.
+
+If the deploy job reports that `GCP_SA_KEY` is not valid JSON, download a fresh JSON key for the deployment service account and replace the repository secret with the raw file contents. On Linux, you can validate and set it with GitHub CLI:
+
+```sh
+python3 -m json.tool /secure/path/gcp-deploy-key.json >/dev/null
+gh secret set GCP_SA_KEY < /secure/path/gcp-deploy-key.json
+```
+
+The secret must be the plain UTF-8 JSON file, not Base64, not wrapped in quotes, and not UTF-16 encoded. The workflow checks the format without printing the credential. Do not paste the key into chat or commit it.
