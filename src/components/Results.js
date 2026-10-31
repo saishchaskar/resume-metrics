@@ -82,7 +82,7 @@ const Results = () => {
         const blobUrl = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
         const link = document.createElement('a');
         link.href = blobUrl;
-        link.download = `resumesignal-results-${selectedId}.csv`;
+        link.download = `resumemetrics-results-${selectedId}.csv`;
         link.click();
         setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
     };
