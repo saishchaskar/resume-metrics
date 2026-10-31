@@ -7,36 +7,27 @@ import json
 import secrets
 from datetime import timedelta
 from time import time
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-from google.cloud import storage
 import pdfplumber
 import docx
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 import sqlite3
-from sentence_transformers import SentenceTransformer, util
-import tensorflow as tf
 import threading
 from flask_mail import Mail, Message
 import smtplib
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
-from email.mime.text import MIMEText
-from reportlab.pdfgen import canvas
-from email.mime.multipart import MIMEMultipart
 from flask import Flask, request, jsonify
-import pandas as pd
 from dotenv import load_dotenv  # Import dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Suppress TensorFlow warnings
-tf.get_logger().setLevel('ERROR')
+LOCAL_TEST_MODE = os.getenv('RESUMESIGNAL_LOCAL_TEST') == '1'
+DATABASE_PATH = os.getenv('DATABASE_PATH', 'users.db')
+LOCAL_TEST_STORAGE = os.getenv('RESUMESIGNAL_TEST_STORAGE', '/tmp/resumesignal-test-storage')
 
 app = Flask(__name__)
 
@@ -48,10 +39,31 @@ cors_origins = [origin.strip() for origin in os.getenv(
 CORS(app, resources={r"/*": {"origins": cors_origins}}, allow_headers=["Content-Type", "Authorization"])
 
 # Google Cloud Storage setup
-BUCKET_NAME = "resume-screening-resumes"
+BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'resume-screening-resumes')
 
-# Load the NLP model (semantic similarity)
-model = SentenceTransformer('all-MiniLM-L6-v2')  # Optimized for semantic similarity
+if LOCAL_TEST_MODE:
+    # Deterministic lightweight embeddings for local integration testing.
+    from collections import Counter
+    from math import sqrt
+
+    class LocalModel:
+        def encode(self, text, convert_to_tensor=True):
+            return Counter(word.lower() for word in text.split())
+
+    class LocalSimilarity:
+        @staticmethod
+        def pytorch_cos_sim(left, right):
+            dot = sum(left[word] * right[word] for word in set(left) & set(right))
+            left_norm = sqrt(sum(value * value for value in left.values()))
+            right_norm = sqrt(sum(value * value for value in right.values()))
+            value = dot / (left_norm * right_norm) if left_norm and right_norm else 0.0
+            return type('Score', (), {'item': lambda self: value})()
+
+    model = LocalModel()
+    util = LocalSimilarity()
+else:
+    from sentence_transformers import SentenceTransformer, util
+    model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # Setup logging
 logging.basicConfig(level=logging.DEBUG)
@@ -74,7 +86,7 @@ DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_urlsafe(32))
 
 
 def login_is_rate_limited(client_ip):
-    conn = sqlite3.connect('users.db', timeout=10)
+    conn = sqlite3.connect(DATABASE_PATH, timeout=10)
     try:
         attempts = conn.execute(
             'SELECT COUNT(*) FROM auth_login_attempts WHERE ip_address = ? AND attempted_at > ?',
@@ -86,7 +98,7 @@ def login_is_rate_limited(client_ip):
 
 
 def record_login_failure(client_ip):
-    conn = sqlite3.connect('users.db', timeout=10)
+    conn = sqlite3.connect(DATABASE_PATH, timeout=10)
     try:
         now = time()
         conn.execute('DELETE FROM auth_login_attempts WHERE attempted_at < ?', (now - 86400,))
@@ -100,7 +112,7 @@ def record_login_failure(client_ip):
 
 
 def clear_login_failures(client_ip):
-    conn = sqlite3.connect('users.db', timeout=10)
+    conn = sqlite3.connect(DATABASE_PATH, timeout=10)
     try:
         conn.execute('DELETE FROM auth_login_attempts WHERE ip_address = ?', (client_ip,))
         conn.commit()
@@ -122,7 +134,7 @@ mail = Mail(app)  # Initialize Flask-Mail
 
 # SQLite Database Initialization
 def init_db():
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     # Create users table if it doesn't exist
     cursor.execute('''
@@ -158,7 +170,16 @@ init_db()
 
 # Function to upload files to GCP bucket
 def upload_to_gcs(file_obj, destination_blob_name):
+    if LOCAL_TEST_MODE:
+        os.makedirs(LOCAL_TEST_STORAGE, exist_ok=True)
+        safe_name = secure_filename(destination_blob_name)
+        local_path = os.path.join(LOCAL_TEST_STORAGE, safe_name)
+        file_obj.seek(0)
+        with open(local_path, 'wb') as destination:
+            destination.write(file_obj.read())
+        return f'http://localhost:5000/api/local-test-resumes/{safe_name}'
     try:
+        from google.cloud import storage
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(destination_blob_name)
@@ -173,7 +194,13 @@ def upload_to_gcs(file_obj, destination_blob_name):
 
 # Function to download files from GCS bucket
 def download_from_gcs(blob_name, destination_path):
+    if LOCAL_TEST_MODE:
+        import shutil
+        source_path = os.path.join(LOCAL_TEST_STORAGE, secure_filename(blob_name))
+        shutil.copyfile(source_path, destination_path)
+        return
     try:
+        from google.cloud import storage
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(blob_name)
@@ -271,7 +298,7 @@ def process_resumes_background(job_description, uploaded_files, task_id, user_id
         logging.debug(f"Task {task_id}: Ranked candidates: {ranked_candidates}")
 
         # Store the result in the database
-        conn = sqlite3.connect('users.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO user_results (user_id, candidates) VALUES (?, ?)
@@ -308,7 +335,7 @@ def signup():
         return jsonify({'error': 'Use a username up to 128 characters and a password between 12 and 128 characters.'}), 400
 
     # Check if user already exists
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     existing_user = cursor.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
     if existing_user:
@@ -352,7 +379,7 @@ def login():
     if not username or len(username) > 128 or not password or len(password) > 128:
         return jsonify({'error': 'Invalid credentials'}), 401
 
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     user = cursor.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
     conn.close()
@@ -377,7 +404,7 @@ def get_user():
     current_user_id = get_jwt_identity()
     logging.debug(f"Fetching data for user ID: {current_user_id}")
     
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     user = cursor.execute('SELECT id, username FROM users WHERE id = ?', (current_user_id,)).fetchone()
     conn.close()
@@ -493,7 +520,7 @@ def get_results():
     current_user_id = get_jwt_identity()
     logging.debug(f"User ID {current_user_id} requested their results.")
 
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     results = cursor.execute('''
         SELECT id, timestamp, candidates FROM user_results
@@ -519,7 +546,7 @@ def delete_result(result_id):
     current_user_id = get_jwt_identity()
     logging.debug(f"User ID {current_user_id} requested deletion of result ID {result_id}.")
 
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     # Check if the result exists and belongs to the user
     result = cursor.execute('''
@@ -548,7 +575,7 @@ def get_specific_result(result_id):
     current_user_id = get_jwt_identity()
     logging.debug(f"User ID {current_user_id} requested retrieval of result ID {result_id}.")
 
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     result = cursor.execute('''
         SELECT id, timestamp, candidates FROM user_results
@@ -567,6 +594,12 @@ def get_specific_result(result_id):
     }
 
     return jsonify({'result': result_data}), 200
+
+@app.route('/api/local-test-resumes/<path:filename>', methods=['GET'])
+def get_local_test_resume(filename):
+    if not LOCAL_TEST_MODE:
+        return jsonify({'error': 'Not found.'}), 404
+    return send_from_directory(LOCAL_TEST_STORAGE, secure_filename(filename), as_attachment=True)
 
 @app.route('/api/send-email', methods=['POST'])
 @jwt_required()
@@ -595,7 +628,7 @@ def send_email():
 
     # Fetch the specific result
     current_user_id = get_jwt_identity()
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     result = cursor.execute(''' 
         SELECT id, timestamp, candidates FROM user_results 
@@ -607,12 +640,14 @@ def send_email():
         logging.error(f"Result ID {result_id} not found for user ID {current_user_id}.")
         return jsonify({'error': 'Result not found.'}), 404
 
+    import pandas as pd
     # Parse candidates
     candidates = json.loads(result[2])
    
     excel_path = f'results_{result_id}.xlsx'
     
     # Create a DataFrame
+    import pandas as pd
     df = pd.DataFrame(candidates)
     df['Rank'] = df.index + 1  # Add a rank column
     df = df[['Rank', 'name', 'score', 'url']]  # Reorder columns

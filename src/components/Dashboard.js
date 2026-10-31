@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import api from '../api';
 import { useNavigate } from 'react-router-dom';
 
@@ -10,22 +10,52 @@ const Dashboard = () => {
     const [loading, setLoading] = useState(false);
     const [rankedCandidates, setRankedCandidates] = useState([]);
     const [error, setError] = useState('');
-    const fileInputRef = useRef(null);
     const navigate = useNavigate(); // Hook for navigation
 
     const handleJobDescChange = (e) => setJobDesc(e.target.value);
-    const handleResumesChange = (e) => setResumes(e.target.files[0]);
-
-    const triggerFileInput = () => {
-        if (fileInputRef.current) {
-            fileInputRef.current.click(); // Trigger the file input click
-        }
+    const handleResumesChange = (e) => {
+        const file = e.target.files?.[0] || null;
+        setResumes(file);
+        setError(file && !file.name.toLowerCase().endsWith('.zip') ? 'Please choose a ZIP file.' : '');
     };
+
+    useEffect(() => {
+        if (!taskId) return undefined;
+        let cancelled = false;
+        let timer;
+        const poll = async () => {
+            try {
+                const { data } = await api.get(`/result/${taskId}`);
+                if (cancelled) return;
+                if (data.state === 'processing') {
+                    setProgress(data.progress || { current: 0, total: 0, filename: '' });
+                    timer = setTimeout(poll, 1500);
+                } else if (data.state === 'completed') {
+                    setRankedCandidates(data.ranked_candidates || []);
+                    setLoading(false);
+                } else {
+                    setError(data.error || 'An error occurred during processing.');
+                    setLoading(false);
+                }
+            } catch (requestError) {
+                if (!cancelled) {
+                    setError(requestError.response?.data?.error || 'Failed to fetch task status. Please try again.');
+                    setLoading(false);
+                }
+            }
+        };
+        poll();
+        return () => { cancelled = true; clearTimeout(timer); };
+    }, [taskId]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!resumes) {
-            setError('Please upload a resume file.');
+        if (!jobDesc.trim()) {
+            setError('Please enter a job description.');
+            return;
+        }
+        if (!resumes || !resumes.name.toLowerCase().endsWith('.zip')) {
+            setError('Please upload a ZIP file containing PDF or DOCX resumes.');
             return;
         }
         setLoading(true);
@@ -46,7 +76,7 @@ const Dashboard = () => {
             });
             const { task_id } = response.data;
             setTaskId(task_id);
-            pollTaskStatus(task_id);
+            if (!task_id) throw new Error('The server did not return a processing task.');
         } catch (error) {
             console.error('Error processing resumes:', error);
             setError(error.response?.data?.error || 'Failed to process resumes. Please try again.');
@@ -54,46 +84,8 @@ const Dashboard = () => {
         }
     };
 
-    const pollTaskStatus = (task_id) => {
-        const interval = setInterval(async () => {
-            try {
-                const response = await api.get(`/result/${task_id}`);
-                const data = response.data;
-
-                if (data.state === 'processing') {
-                    setProgress({
-                        current: data.progress.current,
-                        total: data.progress.total,
-                        filename: data.progress.filename,
-                    });
-                } else if (data.state === 'completed') {
-                    setRankedCandidates(data.ranked_candidates);
-                    setLoading(false);
-                    clearInterval(interval);
-                } else if (data.state === 'failed') {
-                    setError(data.error || 'An error occurred during processing.');
-                    setLoading(false);
-                    clearInterval(interval);
-                }
-            } catch (error) {
-                console.error('Error fetching task status:', error);
-                setError('Failed to fetch task status. Please try again.');
-                setLoading(false);
-                clearInterval(interval);
-            }
-        }, 5000); // Poll every 5 seconds
-    };
-
     const handleSeeResults = () => {
-        const history = JSON.parse(localStorage.getItem('resultsHistory')) || [];
-        const newEntry = {
-            timestamp: new Date().toISOString(),
-            candidates: rankedCandidates,
-        };
-        history.push(newEntry);
-        localStorage.setItem('resultsHistory', JSON.stringify(history));
-
-        navigate('/results', { state: { candidates: rankedCandidates } }); // Pass candidates to results
+        navigate('/results');
     };
 
     return (
@@ -141,19 +133,21 @@ const Dashboard = () => {
                                     />
                                 </div>
                                 <p className="pointer-events-none text-gray-500 mt-4">
-                                    <span className="text-sm">Drag and drop</span> files here <br />
-                                    or <button type="button" onClick={triggerFileInput} className="text-blue-600 hover:underline">select a file</button> from your computer
+                                    <span className="text-sm">Choose a ZIP file</span> here <br />
+                                    <span className="text-blue-600">Select a file</span> from your computer
                                 </p>
                             </div>
                             <input
                                 type="file"
+                                id="resumeZip"
+                                aria-label="Upload resume ZIP file"
                                 accept=".zip"
                                 onChange={handleResumesChange}
                                 className="hidden"
                                 required
-                                ref={fileInputRef}
                             />
                         </label>
+                        {resumes && <p className="mt-2 text-sm text-gray-600">Selected: {resumes.name}</p>}
                     </div>
 
                     {/* File Type Info */}
@@ -190,7 +184,7 @@ const Dashboard = () => {
                         <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
                             <div
                                 className="bg-blue-600 h-2.5 rounded-full"
-                                style={{ width: `${(progress.current / progress.total) * 100}%` }}
+                                style={{ width: `${progress.total > 0 ? Math.min((progress.current / progress.total) * 100, 100) : 0}%` }}
                             ></div>
                         </div>
                         <p className="mt-2">

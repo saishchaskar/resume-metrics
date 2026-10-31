@@ -4,4 +4,5 @@
 __pycache__/
 *.py[cod]
 *.db
+requirements-test.txt
 resume-screening-tool-e7bec94919ca.json

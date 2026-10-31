@@ -3,7 +3,12 @@ name: Deploy to Google Cloud Run
 on:
   push:
     branches:
-      - master 
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   build-and-deploy:
@@ -11,19 +16,23 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
-          service_account_key: ${{ secrets.GCP_SA_KEY }}
 
       - name: Authenticate Docker to GCR
-        run: gcloud auth configure-docker
+        run: gcloud auth configure-docker gcr.io --quiet
 
       - name: Build Docker image
-        run: docker build -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-app:$GITHUB_SHA .
+        run: docker build -f resume-screening-backend/Dockerfile -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-app:$GITHUB_SHA resume-screening-backend
 
       - name: Push Docker image to Google Container Registry
         run: docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-app:$GITHUB_SHA
@@ -35,4 +44,6 @@ jobs:
             --platform managed \
             --region us-central1 \
             --allow-unauthenticated \
-            --port 8080
+            --port 8080 \
+            --set-env-vars APP_ENV=production,GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME || 'resume-screening-resumes' }} \
+            --set-secrets JWT_SECRET_KEY=JWT_SECRET_KEY:latest

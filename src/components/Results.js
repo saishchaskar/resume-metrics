@@ -1,148 +1,76 @@
-import React, { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import React, { useCallback, useEffect, useState } from 'react';
+import api from '../api';
 
 const Results = () => {
-    const location = useLocation();
-    const [resultsHistory, setResultsHistory] = useState([]);
-    const [selectedResult, setSelectedResult] = useState(null);
+    const [results, setResults] = useState([]);
+    const [selectedId, setSelectedId] = useState(null);
+    const [error, setError] = useState('');
+    const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        // Load results history from local storage
-        const history = JSON.parse(localStorage.getItem('resultsHistory')) || [];
-        setResultsHistory(history);
-        console.log('Loaded history:', history);
-
-        // Check if new candidates are passed via location state
-        if (location.state && location.state.candidates) {
-            const newEntry = {
-                timestamp: new Date(),
-                candidates: location.state.candidates,
-            };
-
-            // Prevent duplicate entries (optional)
-            const isDuplicate = history.some(
-                (entry) => JSON.stringify(entry.candidates) === JSON.stringify(newEntry.candidates)
-            );
-
-            if (!isDuplicate) {
-                // Update history by adding the new entry
-                const updatedHistory = [...history, newEntry];
-                setResultsHistory(updatedHistory);
-                setSelectedResult(newEntry);
-
-                // Save updated history to local storage
-                localStorage.setItem('resultsHistory', JSON.stringify(updatedHistory));
-                console.log('Added new entry:', newEntry);
-            } else {
-                // If duplicate, just select the existing entry
-                const existingEntry = history.find(
-                    (entry) => JSON.stringify(entry.candidates) === JSON.stringify(newEntry.candidates)
-                );
-                setSelectedResult(existingEntry);
-            }
-        } else {
-            // If no new candidates passed, select the latest entry if any
-            if (history.length > 0) {
-                setSelectedResult(history[history.length - 1]);
-                console.log('Selected latest entry:', history[history.length - 1]);
-            }
+    const loadResults = useCallback(async () => {
+        setLoading(true);
+        try {
+            const { data } = await api.get('/results');
+            const entries = data.results || [];
+            setResults(entries);
+            setSelectedId((current) => entries.some((entry) => entry.id === current) ? current : (entries[0]?.id ?? null));
+            setError('');
+        } catch (requestError) {
+            setError(requestError.response?.data?.error || 'Could not load saved results.');
+        } finally {
+            setLoading(false);
         }
-    }, [location]);
+    }, []);
 
-    const handleResultClick = (result) => {
-        setSelectedResult(result);
-        console.log('Selected result:', result);
-    };
+    useEffect(() => { loadResults(); }, [loadResults]);
 
-    const handleDelete = (index) => {
-        const updatedHistory = [...resultsHistory];
-        const deletedEntry = updatedHistory.splice(index, 1);
-        setResultsHistory(updatedHistory);
-        localStorage.setItem('resultsHistory', JSON.stringify(updatedHistory));
-        console.log('Deleted entry:', deletedEntry);
-
-        // If the deleted entry was the selected one, update the selection
-        if (selectedResult === resultsHistory[index]) {
-            if (updatedHistory.length > 0) {
-                setSelectedResult(updatedHistory[updatedHistory.length - 1]);
-            } else {
-                setSelectedResult(null);
-            }
+    const removeResult = async (id) => {
+        try {
+            await api.delete(`/results/${id}`);
+            const remaining = results.filter((result) => result.id !== id);
+            setResults(remaining);
+            if (selectedId === id) setSelectedId(remaining[0]?.id ?? null);
+        } catch (requestError) {
+            setError(requestError.response?.data?.error || 'Could not delete this result.');
         }
     };
+
+    const selected = results.find((result) => result.id === selectedId);
 
     return (
-        <div className="flex min-h-screen">
-            {/* Sidebar for Previous Results */}
-            <div className="w-1/4 bg-gray-200 p-4 overflow-y-auto">
-                <h2 className="text-lg font-bold mb-4">Previous Results</h2>
+        <div className="flex min-h-screen flex-col md:flex-row">
+            <aside className="w-full bg-gray-100 p-4 md:w-1/4" aria-label="Saved results">
+                <h2 className="mb-4 text-lg font-bold">Previous Results</h2>
+                {loading && <p role="status">Loading results…</p>}
+                {!loading && results.length === 0 && <p>No saved results yet.</p>}
                 <ul>
-                    {resultsHistory.map((result, index) => (
-                        <li
-                            key={index}
-                            className={`flex justify-between items-center p-2 mb-2 rounded cursor-pointer hover:bg-gray-300 ${selectedResult === result ? 'bg-gray-300' : ''
-                                }`}
-                            onClick={() => handleResultClick(result)}
-                        >
-                            <span>
-                                {new Date(result.timestamp).toLocaleString()} - {result.candidates.length} Candidates
-                            </span>
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation(); // Prevent triggering the click on the list item
-                                    handleDelete(index);
-                                }}
-                                className="text-red-500 hover:text-red-700"
-                                title="Delete this entry"
-                            >
-                                &#10005; {/* Cross (X) symbol */}
+                    {results.map((result) => (
+                        <li key={result.id} className={`mb-2 flex items-center justify-between gap-2 rounded p-2 ${selectedId === result.id ? 'bg-gray-300' : 'bg-white'}`}>
+                            <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setSelectedId(result.id)}>
+                                {new Date(result.timestamp).toLocaleString()} · {(result.candidates || []).length} candidates
                             </button>
+                            <button type="button" className="text-red-600 hover:text-red-800" aria-label={`Delete result ${result.id}`} onClick={() => removeResult(result.id)}>×</button>
                         </li>
                     ))}
                 </ul>
-            </div>
-
-            {/* Main Content for Current Results */}
-            <div className="flex-1 p-4 overflow-x-auto">
-                <h2 className="text-2xl font-bold mb-4">Current Ranked Candidates</h2>
-                {selectedResult && selectedResult.candidates.length > 0 ? (
-                    <table className="min-w-full bg-white border border-gray-200">
-                        <thead>
-                            <tr className="bg-gray-800 text-white">
-                                <th className="py-2 px-4 border-b">Sr. No.</th>
-                                <th className="py-2 px-4 border-b">Candidate Name</th>
-                                <th className="py-2 px-4 border-b">Similarity Score</th>
-                                <th className="py-2 px-4 border-b">Resume</th>
+            </aside>
+            <section className="min-w-0 flex-1 overflow-x-auto p-4">
+                <h1 className="mb-4 text-2xl font-bold">Ranked Candidates</h1>
+                {error && <p className="mb-4 rounded bg-red-100 p-3 text-red-700" role="alert">{error}</p>}
+                {selected?.candidates?.length ? (
+                    <table className="min-w-full border border-gray-200 bg-white">
+                        <thead><tr className="bg-gray-800 text-white"><th className="px-4 py-2">Rank</th><th className="px-4 py-2">Candidate Name</th><th className="px-4 py-2">Similarity Score</th><th className="px-4 py-2">Resume</th></tr></thead>
+                        <tbody>{selected.candidates.map((candidate, index) => (
+                            <tr key={`${candidate.name}-${index}`} className="text-center hover:bg-gray-100">
+                                <td className="border-b px-4 py-2">{index + 1}</td>
+                                <td className="border-b px-4 py-2">{candidate.name}</td>
+                                <td className="border-b px-4 py-2">{Number(candidate.score || 0).toFixed(4)}</td>
+                                <td className="border-b px-4 py-2">{candidate.url ? <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">View Resume</a> : 'No resume available'}</td>
                             </tr>
-                        </thead>
-                        <tbody>
-                            {selectedResult.candidates.map((candidate, index) => (
-                                <tr key={index} className="text-center hover:bg-gray-100">
-                                    <td className="py-2 px-4 border-b">{index + 1}</td>
-                                    <td className="py-2 px-4 border-b">{candidate.name}</td>
-                                    <td className="py-2 px-4 border-b">{candidate.score.toFixed(4)}</td>
-                                    <td className="py-2 px-4 border-b">
-                                        {candidate.url ? (
-                                            <a
-                                                href={candidate.url}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="text-blue-600 hover:underline"
-                                            >
-                                                View Resume
-                                            </a>
-                                        ) : (
-                                            'No Resume Available'
-                                        )}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
+                        ))}</tbody>
                     </table>
-                ) : (
-                    <p>No candidates available.</p>
-                )}
-            </div>
+                ) : !loading && <p>{selected ? 'No candidates in this result.' : 'Select a saved result to view candidates.'}</p>}
+            </section>
         </div>
     );
 };
