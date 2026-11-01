@@ -154,9 +154,22 @@ docker build -f resume-screening-backend/Dockerfile \
 
 This builds the image but does not start it or require Google Cloud credentials. The deployed container still needs the production environment variables and Google Cloud permissions described below.
 
-The Cloud Run workflow updates the existing `flask-backend-app` service in `asia-south1`; it checks that service exists before deploying so a name or region mismatch fails instead of creating another service. It uses GitHub Actions secrets `GCP_PROJECT_ID` and `GCP_SA_KEY` (JSON for a deployment service account). It expects a Secret Manager secret named `JWT_SECRET_KEY`, granted to the Cloud Run runtime service account. That runtime account needs `Storage Object Admin` on the configured resume bucket and `Service Account Token Creator` permission to sign resume URLs. Set the GitHub Actions variable `GCS_BUCKET_NAME` if the bucket is not named `resume-screening-resumes`; the workflow defaults to that bucket name. Never commit credentials, and revoke any service-account key that was previously committed.
+The Cloud Run workflow updates the existing `flask-backend-app` service in `asia-south1`; it checks that service exists before deploying so a name or region mismatch fails instead of creating another service. It uses GitHub Actions secrets `GCP_PROJECT_ID` and `GCP_SA_KEY` (JSON for a deployment service account). It expects a Secret Manager secret named `JWT_SECRET_KEY`, granted to the Cloud Run runtime service account. That runtime account needs `Storage Object Admin` on the configured resume bucket and `Service Account Token Creator` permission on itself to sign resume URLs. The Cloud Storage client now uses IAM `signBlob` with the Cloud Run service-account identity; it does not require a downloaded private key in the container. Enable the IAM Credentials API and grant the runtime identity permission with:
+
+```sh
+export GCP_PROJECT_ID="resume-screening-tool"
+export RUNTIME_SA="user-227@resume-screening-tool.iam.gserviceaccount.com"
+gcloud services enable iamcredentials.googleapis.com --project "$GCP_PROJECT_ID"
+gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+  --member="serviceAccount:$RUNTIME_SA" \
+  --role=roles/iam.serviceAccountTokenCreator
+```
+
+If the Cloud Run service is configured with a different runtime service account, use that account's email for `RUNTIME_SA`. Set the GitHub Actions variable `GCS_BUCKET_NAME` if the bucket is not named `resume-screening-resumes`; the workflow defaults to that bucket name. Never commit credentials, and revoke any service-account key that was previously committed.
 
 Firebase Hosting deploys the frontend from `master` in project `ocr-text-50a5b`. Its build uses the Cloud Run URL shown above; override it with the GitHub Actions variable `REACT_APP_API_URL` if the service URL changes. The Cloud Run deploy sets `CORS_ALLOWED_ORIGINS` for the Firebase `.web.app` and `.firebaseapp.com` domains. Firebase Hosting preview channels build the frontend too, but their temporary domains are not included in the production CORS allowlist.
+
+The Firebase Hosting workflows require the repository Actions secret `FIREBASE_SERVICE_ACCOUNT_OCR_TEXT_50A5B`, containing raw JSON for a service account in project `ocr-text-50a5b` with the Firebase Hosting Admin role (`roles/firebasehosting.admin`). Never paste the key into chat or commit it. The workflow checks this secret before building and reports a clear error if it is missing.
 
 If the deploy job reports that `GCP_SA_KEY` is not valid JSON, download a fresh JSON key for the deployment service account and replace the repository secret with the raw file contents. On Linux, you can validate and set it with GitHub CLI:
 

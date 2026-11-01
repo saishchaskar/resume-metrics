@@ -179,13 +179,40 @@ def upload_to_gcs(file_obj, destination_blob_name):
             destination.write(file_obj.read())
         return f'http://localhost:5000/api/local-test-resumes/{safe_name}'
     try:
+        import google.auth
+        from google.auth.compute_engine.credentials import Credentials as ComputeEngineCredentials
+        from google.auth.transport.requests import Request
         from google.cloud import storage
-        storage_client = storage.Client()
+
+        credentials, project_id = google.auth.default(
+            scopes=['https://www.googleapis.com/auth/cloud-platform']
+        )
+        storage_client = storage.Client(project=project_id, credentials=credentials)
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(destination_blob_name)
         blob.upload_from_file(file_obj)
+
+        # Cloud Run credentials are access-token credentials without a private
+        # key. Pass their service-account identity and token so the storage
+        # client signs via IAM Credentials (signBlob).
+        signing_options = {}
+        if isinstance(credentials, ComputeEngineCredentials):
+            credentials.refresh(Request())
+            service_account_email = credentials.service_account_email
+            if not service_account_email or not credentials.token:
+                raise RuntimeError('Could not resolve the Cloud Run service account for signed URL generation.')
+            signing_options = {
+                'service_account_email': service_account_email,
+                'access_token': credentials.token,
+            }
+
         # Generate a signed URL valid for 1 hour
-        gcs_url = blob.generate_signed_url(expiration=3600, version='v4', method='GET')
+        gcs_url = blob.generate_signed_url(
+            expiration=3600,
+            version='v4',
+            method='GET',
+            **signing_options,
+        )
         logging.debug(f"Uploaded {destination_blob_name} to GCS.")
         return gcs_url
     except Exception as e:
