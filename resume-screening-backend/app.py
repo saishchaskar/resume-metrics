@@ -5,9 +5,11 @@ import logging
 import uuid
 import json
 import secrets
+import re
+import io
 from datetime import timedelta
 from time import time
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import pdfplumber
@@ -48,6 +50,8 @@ if LOCAL_TEST_MODE:
 
     class LocalModel:
         def encode(self, text, convert_to_tensor=True):
+            if isinstance(text, list):
+                return [Counter(word.lower() for word in item.split()) for item in text]
             return Counter(word.lower() for word in text.split())
 
     class LocalSimilarity:
@@ -177,11 +181,9 @@ def upload_to_gcs(file_obj, destination_blob_name):
         file_obj.seek(0)
         with open(local_path, 'wb') as destination:
             destination.write(file_obj.read())
-        return f'http://localhost:5000/api/local-test-resumes/{safe_name}'
+        return safe_name
     try:
         import google.auth
-        from google.auth.compute_engine.credentials import Credentials as ComputeEngineCredentials
-        from google.auth.transport.requests import Request
         from google.cloud import storage
 
         credentials, project_id = google.auth.default(
@@ -191,30 +193,8 @@ def upload_to_gcs(file_obj, destination_blob_name):
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(destination_blob_name)
         blob.upload_from_file(file_obj)
-
-        # Cloud Run credentials are access-token credentials without a private
-        # key. Pass their service-account identity and token so the storage
-        # client signs via IAM Credentials (signBlob).
-        signing_options = {}
-        if isinstance(credentials, ComputeEngineCredentials):
-            credentials.refresh(Request())
-            service_account_email = credentials.service_account_email
-            if not service_account_email or not credentials.token:
-                raise RuntimeError('Could not resolve the Cloud Run service account for signed URL generation.')
-            signing_options = {
-                'service_account_email': service_account_email,
-                'access_token': credentials.token,
-            }
-
-        # Generate a signed URL valid for 1 hour
-        gcs_url = blob.generate_signed_url(
-            expiration=3600,
-            version='v4',
-            method='GET',
-            **signing_options,
-        )
         logging.debug(f"Uploaded {destination_blob_name} to GCS.")
-        return gcs_url
+        return destination_blob_name
     except Exception as e:
         logging.error(f"Failed to upload {destination_blob_name} to GCS: {e}")
         raise
@@ -250,11 +230,92 @@ def extract_text_from_pdf(file):
 # Function to process DOCX files
 def extract_text_from_docx(file):
     doc = docx.Document(file)
-    return '\n'.join([para.text for para in doc.paragraphs]).strip()
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    blocks = []
+    for child in doc.element.body.iterchildren():
+        if child.tag.endswith('}p'):
+            text = Paragraph(child, doc).text.strip()
+            if text:
+                blocks.append(text)
+        elif child.tag.endswith('}tbl'):
+            table = Table(child, doc)
+            for row in table.rows:
+                cells = [cell.text.strip().replace('\n', ' / ') for cell in row.cells]
+                row_text = ' | '.join(cell for cell in cells if cell)
+                if row_text:
+                    blocks.append(row_text)
+    return '\n'.join(blocks).strip()
 
 # Updated truncate_text function
 def truncate_text(text, max_length=512):
     return text[:max_length]
+
+
+JOB_STOP_WORDS = {
+    'and', 'the', 'for', 'with', 'from', 'that', 'this', 'will', 'you', 'your',
+    'our', 'are', 'was', 'were', 'have', 'has', 'had', 'who', 'what', 'when',
+    'where', 'how', 'all', 'any', 'can', 'may', 'must', 'not', 'into', 'over',
+    'under', 'than', 'then', 'them', 'their', 'they', 'its', 'about', 'across',
+    'role', 'work', 'team', 'years', 'year', 'experience', 'skills', 'skill',
+    'strong', 'preferred', 'required', 'ability', 'responsibilities', 'including',
+}
+
+
+def meaningful_terms(text):
+    terms = re.findall(r"[A-Za-z][A-Za-z0-9+#.-]{2,}", text.lower())
+    return list(dict.fromkeys(term for term in terms if term not in JOB_STOP_WORDS))
+
+
+def split_text_chunks(text, max_chars=1000):
+    """Keep the whole resume in view of the embedding model, not just its first 512 chars."""
+    text = re.sub(r'\s+', ' ', text or '').strip()
+    if not text:
+        return ['']
+    return [text[start:start + max_chars] for start in range(0, len(text), max_chars)]
+
+
+def semantic_similarity(job_text, resume_text):
+    job_chunks = split_text_chunks(job_text)
+    resume_chunks = split_text_chunks(resume_text)
+    job_vectors = model.encode(job_chunks, convert_to_tensor=True)
+    resume_vectors = model.encode(resume_chunks, convert_to_tensor=True)
+    if LOCAL_TEST_MODE:
+        scores = []
+        for job_vector in job_vectors:
+            best = 0.0
+            for resume_vector in resume_vectors:
+                shared = set(job_vector) & set(resume_vector)
+                dot = sum(job_vector[token] * resume_vector[token] for token in shared)
+                left = sum(value * value for value in job_vector.values()) ** 0.5
+                right = sum(value * value for value in resume_vector.values()) ** 0.5
+                best = max(best, dot / (left * right) if left and right else 0.0)
+            scores.append(best)
+        return sum(scores) / len(scores) if scores else 0.0
+    matrix = util.pytorch_cos_sim(job_vectors, resume_vectors)
+    return float(matrix.max(dim=1).values.mean().item())
+
+
+def extract_resume_signals(text, job_terms):
+    resume_terms = set(meaningful_terms(text))
+    matched = [term for term in job_terms if term in resume_terms]
+    missing = [term for term in job_terms if term not in resume_terms]
+    lines = [line.strip() for line in (text or '').splitlines() if line.strip()]
+
+    def evidence_for(pattern, limit=4):
+        matcher = re.compile(pattern, re.IGNORECASE)
+        return [line[:240] for line in lines if matcher.search(line)][:limit]
+
+    return {
+        'matched_terms': matched[:20],
+        'missing_terms': missing[:20],
+        'keyword_coverage': len(matched) / len(job_terms) if job_terms else 0.0,
+        'achievement_evidence': evidence_for(r'\b(award|achievement|accomplish|recognition|impact|delivered|increased|improved|reduced|launched)\b'),
+        'community_evidence': evidence_for(r'\b(volunteer|community|nonprofit|charity|civic|extracurricular|student club|social impact)\b'),
+        'people_skill_evidence': evidence_for(r'\b(mentored|coached|collaborated|facilitated|negotiated|presented|led|leadership|communication|stakeholder)\b'),
+        'employment_date_evidence': evidence_for(r'\b(19|20)\d{2}\b|\b(present|current)\b', limit=8),
+    }
 
 # Background task function
 def process_resumes_background(job_description, uploaded_files, task_id, user_id):
@@ -267,17 +328,15 @@ def process_resumes_background(job_description, uploaded_files, task_id, user_id
         total_files = len(uploaded_files)
 
         # Compute embedding for job description
-        truncated_job_desc = truncate_text(job_description, max_length=512)
-        job_embedding = model.encode(truncated_job_desc, convert_to_tensor=True)
-        logging.debug(f"Task {task_id}: Computed embedding for job description.")
+        job_terms = meaningful_terms(job_description)[:40]
 
         for index, uploaded_file in enumerate(uploaded_files, start=1):
             filename = uploaded_file['filename']
-            gcs_url = uploaded_file['gcs_url']
-            file_path = os.path.join(tempfile.gettempdir(), f"downloaded_{filename}")
+            object_name = uploaded_file['object_name']
+            file_path = os.path.join(tempfile.gettempdir(), f"downloaded_{uuid.uuid4().hex}")
             try:
                 # Download the file from GCS
-                download_from_gcs(filename, file_path)
+                download_from_gcs(object_name, file_path)
                 logging.debug(f"Task {task_id}: Downloaded {filename} from GCS.")
 
                 # Extract text
@@ -289,18 +348,18 @@ def process_resumes_background(job_description, uploaded_files, task_id, user_id
                     logging.warning(f"Task {task_id}: Unsupported file format for {filename}. Skipping.")
                     continue
 
-                # Truncate text
-                truncated_resume_text = truncate_text(extracted_text, max_length=512)
+                # Semantic comparison uses chunks from the full documents. Exact
+                # term evidence is shown separately and does not silently change
+                # the semantic ranking score.
+                similarity = semantic_similarity(job_description, extracted_text)
+                signals = extract_resume_signals(extracted_text, job_terms)
 
-                # Compute embedding for resume
-                resume_embedding = model.encode(truncated_resume_text, convert_to_tensor=True)
-                logging.debug(f"Task {task_id}: Computed embedding for {filename}.")
-
-                # Compute cosine similarity
-                similarity = util.pytorch_cos_sim(job_embedding, resume_embedding).item()
-
-                # Add to ranked candidates
-                ranked_candidates.append({'name': filename, 'score': similarity, 'url': gcs_url})
+                ranked_candidates.append({
+                    'name': filename,
+                    'score': similarity,
+                    'object_name': object_name,
+                    'analysis': signals,
+                })
                 logging.debug(f"Task {task_id}: Processed {filename} with similarity score {similarity}.")
 
                 # Update task progress
@@ -478,8 +537,9 @@ def process_resumes_route():
             if filename.lower().endswith('.pdf') or filename.lower().endswith('.docx'):
                 try:
                     with open(file_path, 'rb') as file_obj:
-                        gcs_url = upload_to_gcs(file_obj, filename)
-                        uploaded_files.append({'filename': filename, 'gcs_url': gcs_url})
+                        object_name = f"{current_user_id}_{uuid.uuid4().hex}_{secure_filename(filename)}"
+                        upload_to_gcs(file_obj, object_name)
+                        uploaded_files.append({'filename': filename, 'object_name': object_name})
                         logging.debug(f"Uploaded {filename} to GCS.")
                 except Exception as e:
                     logging.error(f"Error uploading {filename} to GCS: {e}")
@@ -626,7 +686,68 @@ def get_specific_result(result_id):
 def get_local_test_resume(filename):
     if not LOCAL_TEST_MODE:
         return jsonify({'error': 'Not found.'}), 404
-    return send_from_directory(LOCAL_TEST_STORAGE, secure_filename(filename), as_attachment=True)
+    safe_name = secure_filename(filename)
+    exact_path = os.path.join(LOCAL_TEST_STORAGE, safe_name)
+    if not os.path.isfile(exact_path):
+        matches = [name for name in os.listdir(LOCAL_TEST_STORAGE) if name.endswith(f'_{safe_name}')]
+        if not matches:
+            return jsonify({'error': 'Not found.'}), 404
+        safe_name = matches[0]
+    return send_from_directory(LOCAL_TEST_STORAGE, safe_name, as_attachment=True)
+
+
+@app.route('/api/resume-preview/<path:object_name>', methods=['GET'])
+@jwt_required()
+def get_resume_preview(object_name):
+    """Serve a resume only to the authenticated owner of its saved screening."""
+    user_id = get_jwt_identity()
+    conn = sqlite3.connect(DATABASE_PATH)
+    saved_batches = conn.execute(
+        'SELECT candidates FROM user_results WHERE user_id = ?', (user_id,)
+    ).fetchall()
+    conn.close()
+    is_owned = any(
+        candidate.get('object_name') == object_name or
+        (not candidate.get('object_name') and candidate.get('name') == object_name)
+        for (candidate_json,) in saved_batches
+        for candidate in json.loads(candidate_json)
+    )
+    if not is_owned:
+        return jsonify({'error': 'Resume not found.'}), 404
+
+    extension = os.path.splitext(object_name)[1].lower()
+    if extension not in {'.pdf', '.docx'}:
+        return jsonify({'error': 'Unsupported resume format.'}), 415
+
+    try:
+        if LOCAL_TEST_MODE:
+            local_path = os.path.join(LOCAL_TEST_STORAGE, secure_filename(object_name))
+            with open(local_path, 'rb') as resume_file:
+                resume_bytes = resume_file.read()
+        else:
+            from google.cloud import storage
+            resume_bytes = storage.Client().bucket(BUCKET_NAME).blob(object_name).download_as_bytes()
+    except FileNotFoundError:
+        return jsonify({'error': 'Resume file is unavailable.'}), 404
+    except Exception:
+        logging.exception('Could not read resume object for preview.')
+        return jsonify({'error': 'Could not load this resume.'}), 502
+
+    disposition = request.args.get('download') == '1'
+    if request.args.get('format') == 'text' and extension == '.docx' and not disposition:
+        return jsonify({'text': extract_text_from_docx(io.BytesIO(resume_bytes))}), 200, {'Cache-Control': 'private, no-store'}
+
+    media_type = 'application/pdf' if extension == '.pdf' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    response = send_file(
+        io.BytesIO(resume_bytes),
+        mimetype=media_type,
+        as_attachment=disposition,
+        download_name=secure_filename(request.args.get('filename') or os.path.basename(object_name)) or f'resume{extension}',
+        conditional=False,
+    )
+    response.headers['Cache-Control'] = 'private, no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/api/send-email', methods=['POST'])
 @jwt_required()

@@ -405,6 +405,27 @@ input {
 .score-value { color: #435f39; font-variant-numeric: tabular-nums; font-weight: 700; }
 .resume-link { color: #5a773d; font-size: 10px; font-weight: 700; text-decoration: none; white-space: nowrap; }
 .resume-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.resume-actions { white-space: nowrap; }
+.resume-actions button { margin-right: 10px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.resume-actions button:disabled { opacity: .55; cursor: wait; }
+.resume-download { color: #788477; font-size: 10px; text-decoration: underline; text-underline-offset: 3px; }
+.analysis-table-row > td { padding: 0 9px 12px; }
+.candidate-analysis { padding: 0 0 8px; border-bottom: 1px solid #eef0eb; }
+.candidate-analysis summary { display: flex; align-items: center; gap: 12px; color: #637559; font-size: 10px; font-weight: 700; cursor: pointer; }
+.candidate-analysis summary span { color: #8c978b; font-weight: 500; }
+.analysis-explainer { margin: 10px 0; color: #828d82; font-size: 10px; line-height: 1.5; }
+.analysis-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.analysis-grid > div { padding: 10px; border-radius: 6px; background: #f7f9f4; }
+.analysis-grid strong { color: #435642; font-size: 10px; }
+.analysis-grid p { margin: 5px 0 0; color: #778278; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.resume-preview-backdrop { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(20, 31, 25, .72); }
+.resume-preview-modal { display: flex; width: min(1000px, 100%); height: min(88vh, 900px); flex-direction: column; overflow: hidden; border: 1px solid #dce2d8; border-radius: 10px; background: #fff; box-shadow: 0 24px 80px rgba(0, 0, 0, .25); }
+.resume-preview-modal > header { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 15px 20px; border-bottom: 1px solid #e8ebe4; }
+.resume-preview-modal > header .workspace-eyebrow { margin: 0 0 4px; }
+.resume-preview-modal h2 { margin: 0; color: #304136; font-size: 15px; overflow-wrap: anywhere; }
+.resume-preview-modal iframe { width: 100%; min-height: 0; flex: 1; border: 0; background: #f4f5f2; }
+.resume-preview-close { width: 34px; height: 34px; border: 0; border-radius: 50%; background: #f1f4ed; color: #3b4d3f; font-size: 23px; cursor: pointer; }
+.docx-preview-text { min-height: 0; flex: 1; overflow: auto; margin: 0; padding: 24px clamp(20px, 6vw, 72px); color: #344438; font: 13px/1.8 Georgia, serif; white-space: pre-wrap; }
 .muted-cell { color: #a1aaa1; font-size: 10px; }
 .no-matches { margin: 10px 0; padding: 24px 12px; color: #7d887e; font-size: 12px; text-align: center; }
 .score-note { margin: 15px 0 0; color: #929c92; font-size: 10px; line-height: 1.5; }
@@ -446,6 +467,9 @@ input {
   .candidate-sort { justify-content: space-between; }
   .candidate-sort select { max-width: none; flex: 1; }
   .candidate-table { min-width: 510px; }
+  .analysis-grid { grid-template-columns: minmax(0, 1fr); }
+  .resume-preview-backdrop { padding: 8px; }
+  .resume-preview-modal { height: 94vh; }
 }
 
 .auth-page {

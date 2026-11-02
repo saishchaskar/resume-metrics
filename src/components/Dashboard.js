@@ -214,7 +214,7 @@ const Dashboard = () => {
                     </div>
                     <div className="aside-card aside-card--note">
                         <span className="note-icon" aria-hidden="true">i</span>
-                        <div><strong>Keep the brief focused</strong><p>Clear role requirements help make candidate similarity scores easier to interpret.</p></div>
+                        <div><strong>How matching works</strong><p>Semantic similarity compares the full resume with the role brief. Results also show exact term coverage and resume evidence separately; gaps and inferred traits do not affect rank.</p></div>
                     </div>
                 </aside>
             </div>

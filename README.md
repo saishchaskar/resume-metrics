@@ -21,6 +21,8 @@ Mobile sign-in:
 - Production login and signup requests require HTTPS. When TLS terminates at a reverse proxy, ensure it sets `X-Forwarded-Proto` and that the Flask app is reachable only through that trusted proxy.
 - Login failures are rate-limited to 10 attempts per IP per minute using the backend SQLite database. This limit is shared by processes using the same database file.
 - Access tokens expire after 30 minutes and are stored in browser session storage. This limits persistence across browser sessions but does not protect against cross-site scripting; continue to prevent XSS and keep dependencies current.
+- Ranking uses semantic similarity over chunks from the full resume and role brief; it is not an exact word-count matcher. Results show exact term coverage and matched/missing terms as a separate reviewer aid. Detected achievement, community, people-skill, and date phrases are evidence excerpts only; they do not affect rank, and the app does not infer soft skills or penalize employment gaps.
+- PDF resumes open in an in-app browser preview; DOCX resumes show an in-app text preview. Download is a separate action. The authenticated API checks that a resume belongs to one of the signed-in user's saved screening batches before serving it.
 - Do not commit service-account credentials. The local service-account JSON is excluded from Git and Docker build context. Because it was previously tracked, revoke and rotate that key in Google Cloud; ignoring the file does not remove copies from Git history.
 
 Build the frontend with `npm run build`. Firebase Hosting serves the generated `build` directory. Run the Flask API behind an HTTPS-enabled production server and configure the environment values above before deployment.
@@ -83,7 +85,7 @@ Then `npm start` can run without `CHOKIDAR_USEPOLLING=true`.
 
 ### Run against your Google Cloud Storage bucket
 
-This mode uses the real Sentence Transformers model and Google Cloud Storage. It needs network access the first time it downloads the model, plus ADC credentials able to upload/download objects and sign the one-hour resume links. Keep credential files outside the repository. The app's bucket name is configurable with `GCS_BUCKET_NAME` (default: `resume-screening-resumes`). [Google's signed URL setup guide](https://docs.cloud.google.com/storage/docs/access-control/signing-urls-with-helpers) explains the required service-account signing permission.
+This mode uses the real Sentence Transformers model and Google Cloud Storage. It needs network access the first time it downloads the model, plus ADC credentials able to upload and download objects. Keep credential files outside the repository. The app's bucket name is configurable with `GCS_BUCKET_NAME` (default: `resume-screening-resumes`). Resume previews are streamed through the authenticated API, so signed URL signing permissions are not needed.
 
 1. Install the Google Cloud CLI, then set your project and select a globally unique bucket name:
 
@@ -154,18 +156,17 @@ docker build -f resume-screening-backend/Dockerfile \
 
 This builds the image but does not start it or require Google Cloud credentials. The deployed container still needs the production environment variables and Google Cloud permissions described below.
 
-The Cloud Run workflow updates the existing `flask-backend-app` service in `asia-south1`; it checks that service exists before deploying so a name or region mismatch fails instead of creating another service. It uses GitHub Actions secrets `GCP_PROJECT_ID` and `GCP_SA_KEY` (JSON for a deployment service account). It expects a Secret Manager secret named `JWT_SECRET_KEY`, granted to the Cloud Run runtime service account. That runtime account needs `Storage Object Admin` on the configured resume bucket and `Service Account Token Creator` permission on itself to sign resume URLs. The Cloud Storage client now uses IAM `signBlob` with the Cloud Run service-account identity; it does not require a downloaded private key in the container. Enable the IAM Credentials API and grant the runtime identity permission with:
+The Cloud Run workflow updates the existing `flask-backend-app` service in `asia-south1`; it checks that service exists before deploying so a name or region mismatch fails instead of creating another service. It uses GitHub Actions secrets `GCP_PROJECT_ID` and `GCP_SA_KEY` (JSON for a deployment service account). It expects a Secret Manager secret named `JWT_SECRET_KEY`, granted to the Cloud Run runtime service account. That runtime account needs `Storage Object Admin` on the configured resume bucket. No user-managed service-account key or `signBlob` permission is needed by the application.
+
+Set the GitHub Actions variable `GCS_BUCKET_NAME` if the bucket is not named `resume-screening-resumes`; the workflow defaults to that bucket name. Never commit credentials, and revoke any service-account key that was previously committed. If you previously granted the runtime service account `roles/iam.serviceAccountTokenCreator` on the whole project solely for signed resume URLs, remove that grant after the updated app is deployed; it is no longer required.
+
+After the new backend is deployed, remove the now-unneeded project-level signing grant if you added it for the earlier signed-URL flow:
 
 ```sh
-export GCP_PROJECT_ID="resume-screening-tool"
-export RUNTIME_SA="user-227@resume-screening-tool.iam.gserviceaccount.com"
-gcloud services enable iamcredentials.googleapis.com --project "$GCP_PROJECT_ID"
-gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
-  --member="serviceAccount:$RUNTIME_SA" \
-  --role=roles/iam.serviceAccountTokenCreator
+gcloud projects remove-iam-policy-binding resume-screening-tool \
+  --member="serviceAccount:user-227@resume-screening-tool.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountTokenCreator"
 ```
-
-If the Cloud Run service is configured with a different runtime service account, use that account's email for `RUNTIME_SA`. Set the GitHub Actions variable `GCS_BUCKET_NAME` if the bucket is not named `resume-screening-resumes`; the workflow defaults to that bucket name. Never commit credentials, and revoke any service-account key that was previously committed.
 
 Firebase Hosting deploys the frontend from `master` in project `ocr-text-50a5b`. Its build uses the Cloud Run URL shown above; override it with the GitHub Actions variable `REACT_APP_API_URL` if the service URL changes. The Cloud Run deploy sets `CORS_ALLOWED_ORIGINS` for the Firebase `.web.app` and `.firebaseapp.com` domains. Firebase Hosting preview channels build the frontend too, but their temporary domains are not included in the production CORS allowlist.
 

@@ -15,6 +15,26 @@ jobs:
       REACT_APP_API_URL: ${{ vars.REACT_APP_API_URL || 'https://flask-backend-app-879571205118.asia-south1.run.app' }}
     steps:
       - uses: actions/checkout@v4
+      - name: Validate Firebase deploy credential
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OCR_TEXT_50A5B }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          raw = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
+          if not raw:
+              sys.exit('Missing GitHub Actions secret FIREBASE_SERVICE_ACCOUNT_OCR_TEXT_50A5B. Add a Firebase Hosting deploy service-account JSON to this repository secret.')
+          try:
+              credential = json.loads(raw)
+          except json.JSONDecodeError:
+              sys.exit('FIREBASE_SERVICE_ACCOUNT_OCR_TEXT_50A5B must contain raw service-account JSON.')
+          if credential.get('type') != 'service_account' or not credential.get('client_email') or not credential.get('private_key'):
+              sys.exit('FIREBASE_SERVICE_ACCOUNT_OCR_TEXT_50A5B is missing service-account credential fields.')
+          print('Firebase deploy credential is present and valid JSON.')
+          PY
       - uses: actions/setup-node@v4
         with:
           node-version: 20

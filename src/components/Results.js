@@ -11,6 +11,12 @@ const Results = () => {
     const [query, setQuery] = useState('');
     const [sortBy, setSortBy] = useState('score-desc');
     const [deletingId, setDeletingId] = useState(null);
+    const [preview, setPreview] = useState(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
+
+    useEffect(() => () => {
+        if (preview?.objectUrl) URL.revokeObjectURL(preview.objectUrl);
+    }, [preview]);
 
     const loadResults = useCallback(async () => {
         setLoading(true);
@@ -70,12 +76,12 @@ const Results = () => {
             return `"${formulaSafe.replace(/"/g, '""')}"`;
         };
         const rows = [
-            ['Rank', 'Candidate', 'Similarity score', 'Resume URL'],
+            ['Rank', 'Candidate', 'Semantic similarity', 'Exact keyword coverage'],
             ...visibleCandidates.map((candidate, index) => [
                 index + 1,
                 safeText(candidate.name),
                 scoreOf(candidate).toFixed(6),
-                safeText(candidate.url),
+                `${((candidate.analysis?.keyword_coverage || 0) * 100).toFixed(1)}%`,
             ]),
         ];
         const csv = rows.map((row) => row.join(',')).join('\r\n');
@@ -85,6 +91,42 @@ const Results = () => {
         link.download = `resumemetrics-results-${selectedId}.csv`;
         link.click();
         setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    };
+
+    const previewCandidate = async (candidate) => {
+        setPreviewLoading(true);
+        setError('');
+        try {
+            const objectName = candidate.object_name || candidate.name;
+            const encodedName = encodeURIComponent(objectName);
+            if (candidate.name?.toLowerCase().endsWith('.docx')) {
+                const { data } = await api.get(`/resume-preview/${encodedName}?format=text`);
+                setPreview({ candidate, text: data.text || '' });
+            } else {
+                const { data } = await api.get(`/resume-preview/${encodedName}`, { responseType: 'blob' });
+                setPreview({ candidate, objectUrl: URL.createObjectURL(data) });
+            }
+        } catch (requestError) {
+            setError(requestError.response?.data?.error || 'Could not open this resume.');
+        } finally {
+            setPreviewLoading(false);
+        }
+    };
+
+    const downloadCandidate = async (candidate) => {
+        try {
+            const objectName = candidate.object_name || candidate.name;
+            const filename = encodeURIComponent(candidate.name || 'resume');
+            const { data } = await api.get(`/resume-preview/${encodeURIComponent(objectName)}?download=1&filename=${filename}`, { responseType: 'blob' });
+            const objectUrl = URL.createObjectURL(data);
+            const link = document.createElement('a');
+            link.href = objectUrl;
+            link.download = candidate.name || 'resume';
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+        } catch (requestError) {
+            setError(requestError.response?.data?.error || 'Could not download this resume.');
+        }
     };
 
     return (
@@ -130,8 +172,8 @@ const Results = () => {
                         <>
                             <div className="results-summary">
                                 <article className="summary-card"><span>Ranked candidates</span><strong>{candidates.length}</strong><small>In this screening</small></article>
-                                <article className="summary-card"><span>Top similarity</span><strong>{topScore.toFixed(3)}</strong><small>Highest candidate score</small></article>
-                                <article className="summary-card"><span>Average similarity</span><strong>{averageScore.toFixed(3)}</strong><small>Across this batch</small></article>
+                                <article className="summary-card"><span>Top semantic similarity</span><strong>{topScore.toFixed(3)}</strong><small>Highest candidate score</small></article>
+                                <article className="summary-card"><span>Average semantic similarity</span><strong>{averageScore.toFixed(3)}</strong><small>Across this batch</small></article>
                             </div>
 
                             <section className="candidate-card" aria-labelledby="candidate-list-title">
@@ -150,24 +192,53 @@ const Results = () => {
                                 {visibleCandidates.length ? (
                                     <div className="candidate-table-wrap">
                                         <table className="candidate-table">
-                                            <thead><tr><th scope="col">Rank</th><th scope="col">Candidate</th><th scope="col">Similarity score</th><th scope="col">Resume</th></tr></thead>
+                                            <thead><tr><th scope="col">Rank</th><th scope="col">Candidate</th><th scope="col">Semantic score</th><th scope="col">Resume</th></tr></thead>
                                             <tbody>{visibleCandidates.map((candidate, index) => (
-                                                <tr key={`${candidate.name}-${index}`}>
+                                                <React.Fragment key={`${candidate.name}-${index}`}>
+                                                <tr>
                                                     <td><span className="rank-pill">{String(index + 1).padStart(2, '0')}</span></td>
                                                     <td><strong className="candidate-name">{candidate.name}</strong></td>
                                                     <td><span className="score-value">{scoreOf(candidate).toFixed(4)}</span></td>
-                                                    <td>{candidate.url ? <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="resume-link">Open resume <span aria-hidden="true">↗</span></a> : <span className="muted-cell">Unavailable</span>}</td>
+                                                    <td className="resume-actions">
+                                                        <button type="button" className="resume-link" onClick={() => previewCandidate(candidate)} disabled={previewLoading}>View</button>
+                                                        <button type="button" className="resume-download" onClick={() => downloadCandidate(candidate)}>Download</button>
+                                                    </td>
                                                 </tr>
+                                                <tr className="analysis-table-row">
+                                                    <td colSpan="4">
+                                                        <details className="candidate-analysis">
+                                                            <summary>Match details <span>{Math.round((candidate.analysis?.keyword_coverage || 0) * 100)}% exact term coverage</span></summary>
+                                                            <p className="analysis-explainer">Rank is based on semantic similarity across the full resume. Exact term coverage is shown separately and does not change rank. Review the resume before making decisions.</p>
+                                                            <div className="analysis-grid">
+                                                                <div><strong>Terms found</strong><p>{candidate.analysis?.matched_terms?.join(', ') || 'No exact job-description terms found.'}</p></div>
+                                                                <div><strong>Terms not found</strong><p>{candidate.analysis?.missing_terms?.join(', ') || 'All selected terms appear in the resume.'}</p></div>
+                                                                <div><strong>Achievements and impact</strong><p>{candidate.analysis?.achievement_evidence?.join(' · ') || 'No clear evidence phrases found.'}</p></div>
+                                                                <div><strong>Community and extracurricular evidence</strong><p>{candidate.analysis?.community_evidence?.join(' · ') || 'No clear evidence phrases found.'}</p></div>
+                                                                <div><strong>People-skill evidence in the text</strong><p>{candidate.analysis?.people_skill_evidence?.join(' · ') || 'No clear evidence phrases found; this is not an assessment of the candidate.'}</p></div>
+                                                                <div><strong>Employment dates for reviewer</strong><p>{candidate.analysis?.employment_date_evidence?.join(' · ') || 'No dates extracted. Gaps are not inferred or penalized.'}</p></div>
+                                                            </div>
+                                                        </details>
+                                                    </td>
+                                                </tr>
+                                                </React.Fragment>
                                             ))}</tbody>
                                         </table>
                                     </div>
                                 ) : <p className="no-matches">{query ? `No candidate names match “${query}”.` : 'This batch has no candidates.'}</p>}
-                                <p className="score-note">Similarity scores help prioritize review; use them alongside your hiring criteria.</p>
+                                <p className="score-note">Semantic similarity is not a hiring decision. Exact term coverage and extracted resume evidence are reviewer aids; employment gaps and inferred personal traits are not scored.</p>
                             </section>
                         </>
                     )}
                 </main>
             </div>
+            {preview && (
+                <div className="resume-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPreview(null); }}>
+                    <section className="resume-preview-modal" role="dialog" aria-modal="true" aria-labelledby="resume-preview-title">
+                        <header><div><p className="workspace-eyebrow">RESUME PREVIEW</p><h2 id="resume-preview-title">{preview.candidate.name}</h2></div><button type="button" className="resume-preview-close" onClick={() => setPreview(null)} aria-label="Close resume preview">×</button></header>
+                        {preview.objectUrl ? <iframe title={`Resume preview: ${preview.candidate.name}`} src={preview.objectUrl} /> : <pre className="docx-preview-text">{preview.text || 'No readable text was found in this DOCX file.'}</pre>}
+                    </section>
+                </div>
+            )}
         </div>
     );
 };
