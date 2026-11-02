@@ -5,4 +5,6 @@ __pycache__/
 *.py[cod]
 *.db
 requirements-test.txt
+test_local_e2e.py
+benchmark_batch.py
 resume-screening-tool-e7bec94919ca.json

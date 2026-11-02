@@ -65,13 +65,50 @@ jobs:
       - name: Confirm existing Cloud Run service
         run: gcloud run services describe flask-backend-app --platform managed --region asia-south1 --project ${{ secrets.GCP_PROJECT_ID }}
 
+      - name: Confirm pipeline resources exist
+        env:
+          TASK_SERVICE_ACCOUNT: ${{ vars.CLOUD_TASKS_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$TASK_SERVICE_ACCOUNT" ]; then
+            echo "Set the GitHub Actions variable CLOUD_TASKS_SERVICE_ACCOUNT before deploying."
+            exit 1
+          fi
+          gcloud firestore databases describe --database='(default)' --project '${{ secrets.GCP_PROJECT_ID }}'
+          gcloud tasks queues describe resumemetrics-batch-scoring --location=asia-south1 --project '${{ secrets.GCP_PROJECT_ID }}'
+          gcloud iam service-accounts describe "$TASK_SERVICE_ACCOUNT" --project '${{ secrets.GCP_PROJECT_ID }}'
+
       - name: Deploy to Cloud Run
         run: |
+          RUNTIME_SA="$(gcloud run services describe flask-backend-app --platform managed --region asia-south1 --project '${{ secrets.GCP_PROJECT_ID }}' --format='value(spec.template.spec.serviceAccountName)')"
+          TASK_SA="${{ vars.CLOUD_TASKS_SERVICE_ACCOUNT }}"
+          BUCKET_NAME="${{ vars.GCS_BUCKET_NAME || 'resume-screening-resumes' }}"
+          if [ -z "$TASK_SA" ]; then
+            echo "Set the GitHub Actions variable CLOUD_TASKS_SERVICE_ACCOUNT before deploying (for example resumemetrics-task-invoker@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com)."
+            exit 1
+          fi
           gcloud run deploy flask-backend-app \
             --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-backend-app:$GITHUB_SHA \
             --platform managed \
             --region asia-south1 \
             --allow-unauthenticated \
             --port 8080 \
-            --set-env-vars '^@^APP_ENV=production@GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME || 'resume-screening-resumes' }}@CORS_ALLOWED_ORIGINS=https://ocr-text-50a5b.web.app,https://ocr-text-50a5b.firebaseapp.com' \
+            --timeout 900 \
+            --max 3 \
+            --concurrency 4 \
+            --set-env-vars "^@^APP_ENV=production@GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }}@GCS_BUCKET_NAME=$BUCKET_NAME@CORS_ALLOWED_ORIGINS=https://ocr-text-50a5b.web.app,https://ocr-text-50a5b.firebaseapp.com@CLOUD_TASKS_LOCATION=asia-south1@CLOUD_TASKS_QUEUE=resumemetrics-batch-scoring@CLOUD_TASKS_SERVICE_ACCOUNT=$TASK_SA@BATCH_WORKER_URL=https://flask-backend-app-879571205118.asia-south1.run.app@INTEGRATION_WORKER_URL=https://flask-backend-app-879571205118.asia-south1.run.app@BATCH_PREPROCESS_JOB=resumemetrics-batch-preprocess@CLOUD_RUN_JOB_REGION=asia-south1@MAX_BATCH_ZIP_BYTES=1073741824@MAX_BATCH_EXPANDED_BYTES=10737418240" \
             --set-secrets JWT_SECRET_KEY=JWT_SECRET_KEY:latest
+
+          gcloud run jobs deploy resumemetrics-batch-preprocess \
+            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-backend-app:$GITHUB_SHA \
+            --region asia-south1 \
+            --project '${{ secrets.GCP_PROJECT_ID }}' \
+            --service-account "$RUNTIME_SA" \
+            --command python \
+            --args batch_preprocessor.py \
+            --tasks 1 \
+            --parallelism 1 \
+            --max-retries 1 \
+            --task-timeout 1h \
+            --cpu 2 \
+            --memory 4Gi \
+            --set-env-vars "^@^GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }}@GCS_BUCKET_NAME=$BUCKET_NAME@CLOUD_TASKS_LOCATION=asia-south1@CLOUD_TASKS_QUEUE=resumemetrics-batch-scoring@CLOUD_TASKS_SERVICE_ACCOUNT=$TASK_SA@BATCH_WORKER_URL=https://flask-backend-app-879571205118.asia-south1.run.app@MAX_BATCH_ZIP_BYTES=1073741824@MAX_BATCH_EXPANDED_BYTES=10737418240"

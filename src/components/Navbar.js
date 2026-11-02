@@ -32,6 +32,7 @@ const Navbar = () => {
                         <>
                             <Link to="/dashboard" onClick={closeMenu}>Workspace</Link>
                             <Link to="/results" onClick={closeMenu}>Results</Link>
+                            <Link to="/integrations" onClick={closeMenu}>Integrations</Link>
                             <button type="button" className="site-nav__action" onClick={() => { logout(); closeMenu(); }}>
                                 Sign out
                             </button>

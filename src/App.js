@@ -7,6 +7,7 @@ import './index.css';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import Results from './components/Results'; // Import Results component
+import Integrations from './components/Integrations';
 import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
@@ -31,6 +32,14 @@ function App() {
                 element={
                   <ProtectedRoute>
                     <Results />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/integrations"
+                element={
+                  <ProtectedRoute>
+                    <Integrations />
                   </ProtectedRoute>
                 }
               />

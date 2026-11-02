@@ -1,0 +1,12 @@
+[
+  {
+    "origin": [
+      "https://ocr-text-50a5b.web.app",
+      "https://ocr-text-50a5b.firebaseapp.com",
+      "http://localhost:3000"
+    ],
+    "method": ["PUT", "GET", "HEAD"],
+    "responseHeader": ["Content-Type", "Range", "x-goog-resumable"],
+    "maxAgeSeconds": 3600
+  }
+]

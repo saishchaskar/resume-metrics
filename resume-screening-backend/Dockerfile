@@ -14,8 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Make port 8080 available to the world outside this container
 EXPOSE 8080
 
-# Define environment variable
+# Cloud Run provides PORT; keep the conventional local/container default.
 ENV PORT=8080
 
-# Run the application
-CMD ["python", "app.py"]
+# One process loads the embedding model once; threaded requests share it.
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 1 --threads 4 --timeout 900 app:app"]
