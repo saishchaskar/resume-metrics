@@ -93,7 +93,7 @@ jobs:
             --timeout 900 \
             --max 3 \
             --concurrency 4 \
-            --set-env-vars "^@^APP_ENV=production@GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }}@GCS_BUCKET_NAME=$BUCKET_NAME@CORS_ALLOWED_ORIGINS=https://ocr-text-50a5b.web.app,https://ocr-text-50a5b.firebaseapp.com@CLOUD_TASKS_LOCATION=asia-south1@CLOUD_TASKS_QUEUE=resumemetrics-batch-scoring@CLOUD_TASKS_SERVICE_ACCOUNT=$TASK_SA@BATCH_WORKER_URL=https://flask-backend-app-879571205118.asia-south1.run.app@INTEGRATION_WORKER_URL=https://flask-backend-app-879571205118.asia-south1.run.app@BATCH_PREPROCESS_JOB=resumemetrics-batch-preprocess@CLOUD_RUN_JOB_REGION=asia-south1@MAX_BATCH_ZIP_BYTES=1073741824@MAX_BATCH_EXPANDED_BYTES=10737418240" \
+            --set-env-vars "^~^APP_ENV=production~GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }}~GCS_BUCKET_NAME=$BUCKET_NAME~CORS_ALLOWED_ORIGINS=https://ocr-text-50a5b.web.app,https://ocr-text-50a5b.firebaseapp.com~CLOUD_TASKS_LOCATION=asia-south1~CLOUD_TASKS_QUEUE=resumemetrics-batch-scoring~CLOUD_TASKS_SERVICE_ACCOUNT=$TASK_SA~BATCH_WORKER_URL=https://flask-backend-app-879571205118.asia-south1.run.app~INTEGRATION_WORKER_URL=https://flask-backend-app-879571205118.asia-south1.run.app~BATCH_PREPROCESS_JOB=resumemetrics-batch-preprocess~CLOUD_RUN_JOB_REGION=asia-south1~MAX_BATCH_ZIP_BYTES=1073741824~MAX_BATCH_EXPANDED_BYTES=10737418240" \
             --set-secrets JWT_SECRET_KEY=JWT_SECRET_KEY:latest
 
           gcloud run jobs deploy resumemetrics-batch-preprocess \
@@ -109,4 +109,4 @@ jobs:
             --task-timeout 1h \
             --cpu 2 \
             --memory 4Gi \
-            --set-env-vars "^@^GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }}@GCS_BUCKET_NAME=$BUCKET_NAME@CLOUD_TASKS_LOCATION=asia-south1@CLOUD_TASKS_QUEUE=resumemetrics-batch-scoring@CLOUD_TASKS_SERVICE_ACCOUNT=$TASK_SA@BATCH_WORKER_URL=https://flask-backend-app-879571205118.asia-south1.run.app@MAX_BATCH_ZIP_BYTES=1073741824@MAX_BATCH_EXPANDED_BYTES=10737418240"
+            --set-env-vars "^~^GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }}~GCS_BUCKET_NAME=$BUCKET_NAME~CLOUD_TASKS_LOCATION=asia-south1~CLOUD_TASKS_QUEUE=resumemetrics-batch-scoring~CLOUD_TASKS_SERVICE_ACCOUNT=$TASK_SA~BATCH_WORKER_URL=https://flask-backend-app-879571205118.asia-south1.run.app~MAX_BATCH_ZIP_BYTES=1073741824~MAX_BATCH_EXPANDED_BYTES=10737418240"
