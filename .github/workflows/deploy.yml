@@ -70,8 +70,7 @@ jobs:
           TASK_SERVICE_ACCOUNT: ${{ vars.CLOUD_TASKS_SERVICE_ACCOUNT }}
         run: |
           if [ -z "$TASK_SERVICE_ACCOUNT" ]; then
-            echo "Set the GitHub Actions variable CLOUD_TASKS_SERVICE_ACCOUNT before deploying."
-            exit 1
+            TASK_SERVICE_ACCOUNT="resumemetrics-task-invoker@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com"
           fi
           gcloud firestore databases describe --database='(default)' --project '${{ secrets.GCP_PROJECT_ID }}'
           gcloud tasks queues describe resumemetrics-batch-scoring --location=asia-south1 --project '${{ secrets.GCP_PROJECT_ID }}'
@@ -81,11 +80,10 @@ jobs:
         run: |
           RUNTIME_SA="$(gcloud run services describe flask-backend-app --platform managed --region asia-south1 --project '${{ secrets.GCP_PROJECT_ID }}' --format='value(spec.template.spec.serviceAccountName)')"
           TASK_SA="${{ vars.CLOUD_TASKS_SERVICE_ACCOUNT }}"
-          BUCKET_NAME="${{ vars.GCS_BUCKET_NAME || 'resume-screening-resumes' }}"
           if [ -z "$TASK_SA" ]; then
-            echo "Set the GitHub Actions variable CLOUD_TASKS_SERVICE_ACCOUNT before deploying (for example resumemetrics-task-invoker@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com)."
-            exit 1
+            TASK_SA="resumemetrics-task-invoker@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com"
           fi
+          BUCKET_NAME="${{ vars.GCS_BUCKET_NAME || 'resume-screening-resumes' }}"
           gcloud run deploy flask-backend-app \
             --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/flask-backend-app:$GITHUB_SHA \
             --platform managed \
